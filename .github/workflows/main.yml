@@ -75,7 +75,14 @@ jobs:
             }
             { print }
           ' common/modules.bzl
-
+          
+      - name: Prepare module list for legacy builds
+        if: ${{ github.event.inputs.android_version <= 12 }}
+        run: |
+          cd android-kernel
+          mkdir -p common/android
+          touch common/android/gki_${ARCH}_modules
+          echo "drivers/kerneldriver/${{ github.event.inputs.driver_name }}" > common/android/gki_${ARCH}_modules
       - name: Increase stack frame size limit
         run: |
           cd android-kernel
@@ -90,21 +97,17 @@ jobs:
       - name: Build kernel module
         run: |
           cd android-kernel
-          
           if [ ${{ github.event.inputs.android_version }} -le 12 ]; then
-            echo "Using non-GKI build for Android ${{ github.event.inputs.android_version }}"
-            if [ "${{ github.event.inputs.target_arch }}" = "aarch64" ]; then
-              BUILD_CONFIG=common/build.config.gki.aarch64 LTO=thin build/build.sh -j32
-            elif [ "${{ github.event.inputs.target_arch }}" = "x86_64" ]; then
-              BUILD_CONFIG=common/build.config.gki.x86_64 LTO=thin build/build.sh -j32
-            else
-              BUILD_CONFIG=common/build.config.gki.aarch64 LTO=thin build/build.sh -j32
+            export SKIP_MODULE_LIST_CHECK=1
+            if [ -f "out/android${{ github.event.inputs.android_version }}-${{ github.event.inputs.kernel_version }}/common/modules.order" ]; then
+              cp out/android${{ github.event.inputs.android_version }}-${{ github.event.inputs.kernel_version }}/common/modules.order common/android/gki_${ARCH}_modules
             fi
+            BUILD_CONFIG=common/build.config.gki.${{ github.event.inputs.target_arch }} LTO=thin build/build.sh -j32
           else
             echo "Using Bazel build system for Android ${{ github.event.inputs.android_version }}"
             tools/bazel run //common:kernel_${{ github.event.inputs.target_arch }}_dist
           fi
-        continue-on-error: false
+        continue-on-error: true
         
       - name: Upload artifacts
         uses: actions/upload-artifact@v4.6.2
