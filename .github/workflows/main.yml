@@ -52,6 +52,7 @@ jobs:
           echo "obj-y += kerneldriver/" >> common/drivers/Makefile
 
       - name: Add module to GKI modules list
+        if: ${{ github.event.inputs.android_version > 12 }}
         run: |
           cd android-kernel
           MODULE_NAME="drivers/kerneldriver/${{ github.event.inputs.driver_name }}"
@@ -74,7 +75,7 @@ jobs:
             }
             { print }
           ' common/modules.bzl
-        continue-on-error: true
+
       - name: Increase stack frame size limit
         run: |
           cd android-kernel
@@ -90,9 +91,15 @@ jobs:
         run: |
           cd android-kernel
           
-          if [ ${{ github.event.inputs.android_version }} -lt 12 ]; then
-            echo "Using legacy build system for Android ${{ github.event.inputs.android_version }}"
-            build/build.sh
+          if [ ${{ github.event.inputs.android_version }} -le 12 ]; then
+            echo "Using non-GKI build for Android ${{ github.event.inputs.android_version }}"
+            if [ "${{ github.event.inputs.target_arch }}" = "aarch64" ]; then
+              BUILD_CONFIG=common/build.config.gki.arm64 LTO=thin build/build.sh -j32
+            elif [ "${{ github.event.inputs.target_arch }}" = "x86_64" ]; then
+              BUILD_CONFIG=common/build.config.gki.x86_64 LTO=thin build/build.sh -j32
+            else
+              BUILD_CONFIG=common/build.config.gki.aarch64 LTO=thin build/build.sh -j32
+            fi
           else
             echo "Using Bazel build system for Android ${{ github.event.inputs.android_version }}"
             tools/bazel run //common:kernel_${{ github.event.inputs.target_arch }}_dist
