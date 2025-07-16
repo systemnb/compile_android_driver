@@ -74,7 +74,7 @@ jobs:
             }
             { print }
           ' common/modules.bzl
-
+        continue-on-error: true
       - name: Increase stack frame size limit
         run: |
           cd android-kernel
