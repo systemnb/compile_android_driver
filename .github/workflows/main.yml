@@ -94,7 +94,7 @@ jobs:
           if [ ${{ github.event.inputs.android_version }} -le 12 ]; then
             echo "Using non-GKI build for Android ${{ github.event.inputs.android_version }}"
             if [ "${{ github.event.inputs.target_arch }}" = "aarch64" ]; then
-              BUILD_CONFIG=common/build.config.gki.arm64 LTO=thin build/build.sh -j32
+              BUILD_CONFIG=common/build.config.gki.aarch64 LTO=thin build/build.sh -j32
             elif [ "${{ github.event.inputs.target_arch }}" = "x86_64" ]; then
               BUILD_CONFIG=common/build.config.gki.x86_64 LTO=thin build/build.sh -j32
             else
