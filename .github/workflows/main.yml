@@ -98,15 +98,14 @@ jobs:
         run: |
           cd android-kernel
           if [ ${{ github.event.inputs.android_version }} -le 12 ]; then
-            export SKIP_MODULE_LIST_CHECK=1
-            if [ -f "out/android${{ github.event.inputs.android_version }}-${{ github.event.inputs.kernel_version }}/common/modules.order" ]; then
-              cp out/android${{ github.event.inputs.android_version }}-${{ github.event.inputs.kernel_version }}/common/modules.order common/android/gki_${ARCH}_modules
-            fi
             BUILD_CONFIG=common/build.config.gki.${{ github.event.inputs.target_arch }} LTO=thin build/build.sh -j32
+            OUTPUT_PATH="out/android${{ github.event.inputs.android_version }}-${{ github.event.inputs.kernel_version }}"
           else
             echo "Using Bazel build system for Android ${{ github.event.inputs.android_version }}"
             tools/bazel run //common:kernel_${{ github.event.inputs.target_arch }}_dist
+            OUTPUT_PATH="out/kernel_${{ github.event.inputs.target_arch }}"
           fi
+          echo "OUTPUT_PATH=$OUTPUT_PATH" >> $GITHUB_ENV
         continue-on-error: true
         
       - name: Upload artifacts
@@ -114,4 +113,4 @@ jobs:
         with:
           name: kernel-driver-${{ github.event.inputs.target_arch }}
           path: |
-            android-kernel/out/kernel_${{ github.event.inputs.target_arch }}
+            android-kernel/${{ env.OUTPUT_PATH }}
