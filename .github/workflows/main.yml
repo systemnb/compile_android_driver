@@ -80,9 +80,8 @@ jobs:
         if: ${{ github.event.inputs.android_version <= 12 }}
         run: |
           cd android-kernel
-          mkdir -p common/android
-          touch common/android/gki_${ARCH}_modules
-          echo "drivers/kerneldriver/${{ github.event.inputs.driver_name }}" > common/android/gki_${ARCH}_modules
+          echo "drivers/kerneldriver/${{ github.event.inputs.driver_name }}" >> common/android/gki_aarch64_modules
+          
       - name: Increase stack frame size limit
         run: |
           cd android-kernel
@@ -99,7 +98,7 @@ jobs:
           cd android-kernel
           if [ ${{ github.event.inputs.android_version }} -le 12 ]; then
             BUILD_CONFIG=common/build.config.gki.${{ github.event.inputs.target_arch }} LTO=thin build/build.sh -j32
-            OUTPUT_PATH="out/android${{ github.event.inputs.android_version }}-${{ github.event.inputs.kernel_version }}"
+            OUTPUT_PATH="out/android${{ github.event.inputs.android_version }}-${{ github.event.inputs.kernel_version }}/dist"
           else
             echo "Using Bazel build system for Android ${{ github.event.inputs.android_version }}"
             tools/bazel run //common:kernel_${{ github.event.inputs.target_arch }}_dist
