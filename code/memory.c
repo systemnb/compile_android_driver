@@ -11,7 +11,15 @@
 #include <asm/page.h>
 #include <asm/pgtable.h>
 
+#include <linux/mmzone.h>
+
 extern struct mm_struct *get_task_mm(struct task_struct *task);
+extern unsigned long max_pfn;
+
+static bool valid_phys_addr_range(phys_addr_t addr, size_t count) {
+    // 检查地址范围是否有效
+    return (addr + count) <= (max_pfn << PAGE_SHIFT);
+}
 
 #if(LINUX_VERSION_CODE >= KERNEL_VERSION(5, 4, 61))
 extern void mmput(struct mm_struct *);
