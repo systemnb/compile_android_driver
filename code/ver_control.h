@@ -35,7 +35,7 @@
 //#define MY_LINUX_VERSION_CODE KERNEL_VERSION(5,10,43)
 //#define MY_LINUX_VERSION_CODE KERNEL_VERSION(5,15,41)
 //#define MY_LINUX_VERSION_CODE KERNEL_VERSION(6,1,75)
-#define MY_LINUX_VERSION_CODE KERNEL_VERSION(6,6,56)
+#define MY_LINUX_VERSION_CODE KERNEL_VERSION(6,6,30)
 #endif
 
 #ifdef CONFIG_DEBUG_PRINTK
@@ -45,4 +45,5 @@ static inline void printk_debug(char *fmt, ...) {}
 #endif
 
 #endif /* VERSION_CONTROL_H_ */
+
 
