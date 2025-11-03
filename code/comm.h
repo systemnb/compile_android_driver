@@ -26,8 +26,7 @@ enum OPERATIONS {
     OP_MODULE_BASE = 0x803,
     OP_HIDE_PROCESS = 0x804,
     OP_PID_HIDE_PROCESS = 0x805,
-    OP_GET_PROCESS_PID = 0x806,
-    OP_UNLOAD_DRIVER = 0x807
+    OP_GET_PROCESS_PID = 0x806
 };
 
 char* get_rand_str(void)
