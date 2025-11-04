@@ -34,21 +34,11 @@ jobs:
 
       - name: Checkout repository
         uses: actions/checkout@v4.2.2
-
-      - name: Check Disk Space
-        run: df -h
-
-      - name: Create and Enable 3G Swap
-        run: |
-          sudo swapoff -a
-          sudo fallocate -l 3G /swapfile
-          sudo chmod 600 /swapfile
-          sudo mkswap /swapfile
-          sudo swapon /swapfile
-          free -h
         
-      - name: Rename code directory to kerneldriver
-        run: mv code kerneldriver
+      - name: Prepare kerneldriver directory
+        run: |
+          mkdir kerneldriver
+          mv ./code/*.h ./code/*.c ./code/Makefile kerneldriver/
           
       - name: Install repo tool
         run: |
