@@ -22,9 +22,6 @@ jobs:
     runs-on: ubuntu-latest
     
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4.2.2
-
       - name: Maximize Build Space
         uses: easimon/maximize-build-space@master
         with:
@@ -34,6 +31,9 @@ jobs:
           remove-android: 'true'
           remove-haskell: 'true'
           remove-codeql: 'true'
+
+      - name: Checkout repository
+        uses: actions/checkout@v4.2.2
 
       - name: Check Disk Space
         run: df -h
@@ -47,10 +47,8 @@ jobs:
           sudo swapon /swapfile
           free -h
         
-      - name: Debug and rename code directory
-        run: |
-          ls -laR
-          mv code kerneldriver
+      - name: Rename code directory to kerneldriver
+        run: mv code kerneldriver
           
       - name: Install repo tool
         run: |
