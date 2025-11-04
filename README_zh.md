@@ -81,5 +81,5 @@ A: 确认内核版本在 [Android 内核源码](https://android.googlesource.com
 ## 支持
 
 问题反馈和功能请求：
-- [提交 Issue](https://github.com/systemnb/compile_android_driver/issues)
+- [提交 Issue](https://github.com/Cycle1337/compile_android_driver/issues)
 - 请提供工作流日志和输入参数

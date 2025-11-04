@@ -82,5 +82,5 @@ A: Confirm your kernel_version matches existing branches at [Android Kernel Sour
 ## Support
 
 For issues and feature requests:
-- [Open an Issue](https://github.com/systemnb/compile_android_driver/issues)
+- [Open an Issue](https://github.com/Cycle1337/compile_android_driver/issues)
 - Provide workflow logs and input parameters
