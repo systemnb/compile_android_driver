@@ -25,7 +25,7 @@ This GitHub Action automates the process of building Android kernel drivers in t
 2. Select **Android Kernel Driver Builder**
 3. Click **Run workflow**
 4. Provide these parameters:
-   - `android_version`: Your Android version (Kernel) (e.g., `14`)
+   - `android_version`: Your Android version (Kernel) (e.g., `14`) (for 4.x kernel should be empty)
    - `kernel_version`: Kernel version (e.g., `6.1`)
    - `driver_name`: Your driver filename (e.g., `mydriver.ko`)
    - `target_arch`: Device architecture (default: `aarch64`)
@@ -45,8 +45,8 @@ After successful compilation (30minutes):
 
 | Parameter | Description | Example |
 |-----------|-------------|---------|
-| `android_version` | Android OS version | `11`, `12`, `13`, `14` |
-| `kernel_version` | Linux kernel version | `5.10`, `5.15`, `6.1` |
+| `android_version` | Android OS version | `11`, `12`, `13`, `14`, `15`, `16` |
+| `kernel_version` | Linux kernel version | `4.9`, `4.14`, `4.19`, `5.10`, `5.15`, `6.1`, `6.6`, `6.12`, `6.18` |
 | `driver_name` | Output driver filename | `custom_driver.ko` |
 | `target_arch` | Device CPU architecture | `aarch64`, `x86_64` |
 

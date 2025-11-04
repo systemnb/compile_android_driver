@@ -24,7 +24,7 @@
 2. 选择 **Android Kernel Driver Builder**
 3. 点击 **Run workflow**
 4. 提供以下参数：
-   - `android_version`: Android 版本(内核) (例如 `14`)
+   - `android_version`: Android 版本(内核) (例如 `14`) (对于4系内核请留空)
    - `kernel_version`: 内核版本 (例如 `6.1`)
    - `driver_name`: 驱动文件名 (例如 `mydriver.ko`)
    - `target_arch`: 设备架构 (默认 `aarch64`)
@@ -44,8 +44,8 @@
 
 | 参数 | 说明 | 示例 |
 |------|------|------|
-| `android_version` | Android 系统版本 | `11`, `12`, `13`, `14` |
-| `kernel_version` | Linux 内核版本 | `5.10`, `5.15`, `6.1` |
+| `android_version` | Android 系统版本 | `11`, `12`, `13`, `14`, `15`, `16` |
+| `kernel_version` | Linux 内核版本 | `4.9`, `4.14`, `4.19`, `5.10`, `5.15`, `6.1`, `6.6`, `6.12`, `6.18` |
 | `driver_name` | 驱动文件名 | `custom_driver.ko` |
 | `target_arch` | 设备 CPU 架构 | `aarch64`, `x86_64` |
 
