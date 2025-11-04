@@ -115,8 +115,7 @@ size_t read_physical_address(phys_addr_t pa, void *buffer, size_t size)
 	{
 		return 0;
 	}
-
-	mapped = ioremap_nocache(pa, size);
+	mapped = ioremap(pa, size);
 	if (!mapped)
 	{
 		return 0;
@@ -138,7 +137,7 @@ size_t write_physical_address(phys_addr_t pa, void *buffer, size_t size)
 	{
 		return 0;
 	}
-	mapped = ioremap_nocache(pa, size);
+	mapped = ioremap(pa, size);
 	if (!mapped)
 	{
 		return 0;
