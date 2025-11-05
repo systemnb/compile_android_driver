@@ -1,3 +1,5 @@
+[![Telegram](https://img.shields.io/badge/Follow-Telegram-blue.svg?logo=telegram)](https://t.me/Cycle1337)
+
 **Read this in other languages: [English](README.md), [中文](README_zh.md).**
 # Automated Kernel Driver Builder
 
