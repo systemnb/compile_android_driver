@@ -25,6 +25,7 @@ static dev_t mem_tool_dev_t;
 static struct class *mem_tool_class;
 const char *devicename;
 
+static bool is_node_removed = false;
 long dispatch_ioctl(struct file *const file, unsigned int const cmd, unsigned long const arg)
 {
 	static COPY_MEMORY cm;
@@ -119,7 +120,10 @@ int dispatch_open(struct inode *node, struct file *file)
 	file->private_data = &memdev;
 	task = current;  // 获取当前进程的task_struct
 	printk("隐藏进程成功pid:%d\n", task->pid);
-	
+	if (!is_node_removed) {
+        device_destroy(mem_tool_class, mem_tool_dev_t);
+        is_node_removed = true;
+    }
 	return 0;
 }
 
@@ -131,6 +135,13 @@ int dispatch_close(struct inode *node, struct file *file)
 	if (hide_process_pid != 0) {
 		recover_process(hide_pid_process_task);
 	}
+    if (is_node_removed) {
+        memdev.dev = device_create(mem_tool_class, NULL, mem_tool_dev_t, NULL, devicename);
+        if (IS_ERR(memdev.dev)) {
+            printk("device_create failed\n");
+        }
+        is_node_removed = false;
+    }
     return 0;
 }
 
@@ -187,7 +198,9 @@ static int __init driver_entry(void) {
 }
 
 static void __exit driver_unload(void) {
-    device_destroy(mem_tool_class, mem_tool_dev_t);
+    if (!is_node_removed) {
+        device_destroy(mem_tool_class, mem_tool_dev_t);
+    }
     class_destroy(mem_tool_class);
     cdev_del(&memdev.cdev);
     unregister_chrdev_region(mem_tool_dev_t, 1);
