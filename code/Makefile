@@ -1,1 +1,3 @@
-﻿obj-m += rwProcMem_module.o
+obj-m += memory.o
+obj-m += process.o
+obj-m += entry.o

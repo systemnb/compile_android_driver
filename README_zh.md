@@ -1,3 +1,5 @@
+[![Telegram](https://img.shields.io/badge/Follow-Telegram-blue.svg?logo=telegram)](https://t.me/Cycle1337)
+
 **其他语言版本: [English](README.md), [中文](README_zh.md).**
 # 自动化内核驱动构建工具
 本 GitHub Action 可在云端自动化编译 Android 内核驱动程序，无需本地编译环境。解决访问 Google 源码仓库等问题，编译时间控制在 30min内。
@@ -24,7 +26,7 @@
 2. 选择 **Android Kernel Driver Builder**
 3. 点击 **Run workflow**
 4. 提供以下参数：
-   - `android_version`: Android 版本(内核) (例如 `14`)
+   - `android_version`: Android 版本(内核) (例如 `14`) (对于4系内核请留空)
    - `kernel_version`: 内核版本 (例如 `6.1`)
    - `driver_name`: 驱动文件名 (例如 `mydriver.ko`)
    - `target_arch`: 设备架构 (默认 `aarch64`)
@@ -44,8 +46,8 @@
 
 | 参数 | 说明 | 示例 |
 |------|------|------|
-| `android_version` | Android 系统版本 | `11`, `12`, `13`, `14` |
-| `kernel_version` | Linux 内核版本 | `5.10`, `5.15`, `6.1` |
+| `android_version` | Android 系统版本 | `11`, `12`, `13`, `14`, `15`, `16` |
+| `kernel_version` | Linux 内核版本 | `4.9`, `4.14`, `4.19`, `5.4`, `5.10`, `5.15`, `6.1`, `6.6`, `6.12`, `6.18` |
 | `driver_name` | 驱动文件名 | `custom_driver.ko` |
 | `target_arch` | 设备 CPU 架构 | `aarch64`, `x86_64` |
 
@@ -81,5 +83,5 @@ A: 确认内核版本在 [Android 内核源码](https://android.googlesource.com
 ## 支持
 
 问题反馈和功能请求：
-- [提交 Issue](https://github.com/systemnb/compile_android_driver/issues)
+- [提交 Issue](https://github.com/Cycle1337/compile_android_driver/issues)
 - 请提供工作流日志和输入参数
