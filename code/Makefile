@@ -1,1 +1,1 @@
-obj += aurora.o
+obj-m += aurora.o
