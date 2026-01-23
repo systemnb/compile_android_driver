@@ -14,6 +14,17 @@
 #include <linux/file.h>
 #include <linux/path.h>
 
+#include <linux/kernel.h>
+#include <linux/errno.h>
+#include <linux/highmem.h>
+#include <linux/dcache.h>
+#include <linux/uaccess.h>
+
+#include <linux/delay.h>
+#include <linux/string.h>
+
+#include <asm/ptrace.h>
+#include <asm/pgtable.h>
 #include <asm/cpu.h>
 #include <asm/io.h>
 #include <asm/page.h>
