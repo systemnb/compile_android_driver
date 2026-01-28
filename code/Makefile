@@ -1,1 +1,1 @@
-obj-m += hwBreakpointProc_module.o
+obj-m += arm64_hw_bp.o
