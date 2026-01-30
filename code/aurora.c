@@ -71,6 +71,7 @@ static void select_random_device_name(void)
     printk(KERN_INFO "Aurora: Selected random device name: %s\n", selected_device_name);
 }
 
+/*
 // 生成完全随机的设备名（更隐蔽）
 static void generate_random_device_name(void)
 {
@@ -101,6 +102,7 @@ static void generate_random_device_name(void)
     
     printk(KERN_INFO "Aurora: Generated random device name: %s\n", selected_device_name);
 }
+*/
 
 static phys_addr_t translate_linear_address(struct mm_struct *mm, uintptr_t va)
 {
