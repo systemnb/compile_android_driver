@@ -71,39 +71,6 @@ static void select_random_device_name(void)
     printk(KERN_INFO "Aurora: Selected random device name: %s\n", selected_device_name);
 }
 
-/*
-// 生成完全随机的设备名（更隐蔽）
-static void generate_random_device_name(void)
-{
-    char random_part[12];
-    int i;
-    
-    // 生成8个随机字符
-    get_random_bytes(random_part, 8);
-    
-    // 转换为可打印字符（小写字母和数字）
-    for (i = 0; i < 8; i++) {
-        unsigned char c = random_part[i] % 36;
-        if (c < 26)
-            random_part[i] = 'a' + c;
-        else
-            random_part[i] = '0' + (c - 26);
-    }
-    random_part[8] = '\0';
-    
-    // 添加前缀使其看起来像正常设备
-    const char* prefixes[] = {"dev_", "sys_", "hid_", "tty", "rfcomm", "usb", "video"};
-    unsigned int prefix_rand;
-    get_random_bytes(&prefix_rand, sizeof(prefix_rand));
-    int prefix_index = prefix_rand % (sizeof(prefixes) / sizeof(prefixes[0]));
-    
-    snprintf(selected_device_name, sizeof(selected_device_name), 
-             "%s%s", prefixes[prefix_index], random_part);
-    
-    printk(KERN_INFO "Aurora: Generated random device name: %s\n", selected_device_name);
-}
-*/
-
 static phys_addr_t translate_linear_address(struct mm_struct *mm, uintptr_t va)
 {
     pgd_t *pgd;
@@ -435,12 +402,7 @@ static int __init driver_entry(void)
 {
     int ret;
     
-    // 选择随机设备名（两种方式选其一）
-    // 方式1：从预选池中随机选择
     select_random_device_name();
-    
-    // 方式2：生成完全随机的设备名（更隐蔽）
-    // generate_random_device_name();
     
     // 注册设备
     misc_dev.minor = MISC_DYNAMIC_MINOR;
