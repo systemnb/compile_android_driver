@@ -12,7 +12,7 @@
 #define CONFIG_PROC_NODE_AUTH_KEY "aurorakey07123456789"
 
 // 调试打印模式
-//#define CONFIG_DEBUG_PRINTK
+#define CONFIG_DEBUG_PRINTK
 
 // 动态寻址模式
 #define CONFIG_KALLSYMS_LOOKUP_NAME
