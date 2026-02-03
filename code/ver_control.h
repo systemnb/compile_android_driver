@@ -6,8 +6,7 @@
 #define CONFIG_MODULE_GUIDE_ENTRY
 
 // 生成proc用户层交互节点文件
-//关闭进城隐藏
-//#define CONFIG_USE_PROC_FILE_NODE
+#define CONFIG_USE_PROC_FILE_NODE
 
 // 隐蔽通信密钥
 #define CONFIG_PROC_NODE_AUTH_KEY "aurorakey07123456789"
