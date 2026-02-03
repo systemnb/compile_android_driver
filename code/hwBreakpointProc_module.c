@@ -517,7 +517,7 @@ static int hwBreakpointProc_dev_init(void) {
 	g_hwBreakpointProc_devp->proc_parent = proc_mkdir(CONFIG_PROC_NODE_AUTH_KEY, NULL);
 	if(g_hwBreakpointProc_devp->proc_parent) {
 		g_hwBreakpointProc_devp->proc_entry = proc_create(CONFIG_PROC_NODE_AUTH_KEY, S_IRUGO | S_IWUGO, g_hwBreakpointProc_devp->proc_parent, &hwBreakpointProc_proc_ops);
-		start_hide_procfs_dir(CONFIG_PROC_NODE_AUTH_KEY);
+		//start_hide_procfs_dir(CONFIG_PROC_NODE_AUTH_KEY);
 	}
 #endif
 
@@ -553,7 +553,7 @@ static void hwBreakpointProc_dev_exit(void) {
 		proc_remove(g_hwBreakpointProc_devp->proc_parent);
 		g_hwBreakpointProc_devp->proc_parent = NULL;
 	}
-	stop_hide_procfs_dir();
+	//stop_hide_procfs_dir();
 #endif
 	kfree(g_hwBreakpointProc_devp);
 	printk(KERN_EMERG "Goodbye\n");
