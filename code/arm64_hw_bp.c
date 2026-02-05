@@ -2,6 +2,7 @@
  * ARM64硬件断点内核模块 - 修复版本
  * 硬件断点正确绑定到线程(task_struct)而非进程ID
  * 适配Linux 5.10+内核
+ * 修改：增加全局寄存器存储，修改断点回调逻辑
  */
 
 #include "arm64_hw_bp.h"
@@ -46,11 +47,19 @@ typedef struct _ARM64_REGISTERS {
     uint64_t v[32];    // 向量寄存器 (可选)
 } ARM64_REGISTERS, *PARM64_REGISTERS;
 
-typedef struct _REGISTER_OPERATION {
-    pid_t tid;        // 线程ID
-    ARM64_REGISTERS __user *regs;
-    bool read;        // true: 读取寄存器, false: 写入寄存器
-} REGISTER_OPERATION, *PREGISTER_OPERATION;
+// 断点命中时存储的寄存器信息
+typedef struct _BREAKPOINT_HIT_INFO {
+    pid_t tid;                    // 线程ID
+    uintptr_t addr;              // 断点地址
+    ARM64_REGISTERS regs;        // 命中断点时的寄存器值
+    uint64_t hit_time;           // 命中时间（jiffies）
+} BREAKPOINT_HIT_INFO, *PBREAKPOINT_HIT_INFO;
+
+typedef struct _GET_BREAKPOINT_HIT_REGISTERS {
+    pid_t tid;                    // 线程ID
+    uintptr_t addr;              // 断点地址
+    ARM64_REGISTERS __user *regs; // 返回的寄存器数据
+} GET_BREAKPOINT_HIT_REGISTERS, *PGET_BREAKPOINT_HIT_REGISTERS;
 
 typedef struct _PROCESS_CONTROL {
     pid_t tid;        // 线程ID
@@ -67,11 +76,10 @@ enum HW_BREAKPOINT_OPERATIONS {
     OP_CLEAR_BREAKPOINT = 0x805,
     OP_LIST_BREAKPOINTS = 0x806,
     OP_CLEAR_ALL_BREAKPOINTS = 0x807,
-    OP_GET_REGISTERS = 0x808,
-    OP_SET_REGISTERS = 0x809,
     OP_SUSPEND_THREAD = 0x80A,
     OP_RESUME_THREAD = 0x80B,
     OP_SINGLE_STEP = 0x80C,
+    OP_GET_BREAKPOINT_HIT_REGISTERS = 0x80D, // 新增：获取断点命中的寄存器信息
 };
 
 // 暂停线程信息结构
@@ -87,6 +95,9 @@ struct hw_breakpoint_entry {
     HW_BREAKPOINT_INFO info;
     struct task_struct *task;    // 指向线程的task_struct
     struct list_head list;
+    ARM64_REGISTERS saved_regs;  // 保存的寄存器值
+    bool hit_regs_valid;         // 寄存器是否有效
+    uint64_t hit_time;           // 命中时间
 };
 
 // 全局变量
@@ -107,13 +118,13 @@ static void hw_breakpoint_handler(struct perf_event *bp, struct perf_sample_data
 static int set_hw_breakpoint(pid_t tid, uintptr_t addr, uint32_t type);
 static int clear_hw_breakpoint(pid_t tid, uintptr_t addr);
 static void clear_all_breakpoints(void);
-static int get_thread_registers(pid_t tid, ARM64_REGISTERS __user *regs);
-static int set_thread_registers(pid_t tid, ARM64_REGISTERS __user *regs);
 static int suspend_thread(pid_t tid);
 static int resume_thread(pid_t tid);
 static int single_step_thread(pid_t tid);
 static struct suspended_thread *find_suspended_thread(pid_t tid);
 static struct task_struct *get_thread_by_tid(pid_t tid);
+static int save_thread_registers(struct task_struct *task, struct pt_regs *regs, ARM64_REGISTERS *saved_regs);
+static int get_breakpoint_hit_registers(pid_t tid, uintptr_t addr, ARM64_REGISTERS __user *regs);
 
 // 根据线程ID获取task_struct
 static struct task_struct *get_thread_by_tid(pid_t tid)
@@ -429,7 +440,63 @@ static struct suspended_thread *find_suspended_thread(pid_t tid)
     return NULL;
 }
 
-// 硬件断点处理函数
+// 保存线程寄存器到ARM64_REGISTERS结构
+static int save_thread_registers(struct task_struct *task, struct pt_regs *regs, ARM64_REGISTERS *saved_regs)
+{
+    int i;
+    
+    if (!task || !regs || !saved_regs)
+        return -EINVAL;
+    
+    // 填充寄存器结构
+    memset(saved_regs, 0, sizeof(ARM64_REGISTERS));
+    
+    // 复制通用寄存器 X0-X30
+    for (i = 0; i < 31; i++) {
+        saved_regs->x[i] = regs->regs[i];
+    }
+    
+    // 复制特殊寄存器
+    saved_regs->fp = regs->regs[29];     // X29作为帧指针
+    saved_regs->lr = regs->regs[30];     // X30作为链接寄存器
+    saved_regs->sp = regs->sp;
+    saved_regs->pc = regs->pc;
+    saved_regs->pstate = regs->pstate;
+    
+    return 0;
+}
+
+// 获取断点命中的寄存器信息
+static int get_breakpoint_hit_registers(pid_t tid, uintptr_t addr, ARM64_REGISTERS __user *regs)
+{
+    struct hw_breakpoint_entry *entry;
+    int ret = -ENOENT;
+    
+    if (!regs)
+        return -EFAULT;
+    
+    mutex_lock(&bp_mutex);
+    
+    list_for_each_entry(entry, &bp_list, list) {
+        if (entry->info.tid == tid && entry->info.addr == addr && entry->hit_regs_valid) {
+            // 复制保存的寄存器数据到用户空间
+            if (copy_to_user(regs, &entry->saved_regs, sizeof(ARM64_REGISTERS))) {
+                ret = -EFAULT;
+            } else {
+                printk(KERN_INFO "Returned saved registers for thread %d at breakpoint 0x%016lx\n", 
+                       tid, (unsigned long)addr);
+                ret = 0;
+            }
+            break;
+        }
+    }
+    
+    mutex_unlock(&bp_mutex);
+    
+    return ret;
+}
+
+// 硬件断点处理函数 - 修改：发送信号而不是直接设置线程状态
 static void hw_breakpoint_handler(struct perf_event *bp,
                                  struct perf_sample_data *data,
                                  struct pt_regs *regs)
@@ -456,6 +523,13 @@ static void hw_breakpoint_handler(struct perf_event *bp,
     printk(KERN_INFO "  Type: %u\n", entry->info.type);
     printk(KERN_INFO "  PC: 0x%016lx\n", (unsigned long)instruction_pointer(regs));
     
+    // 保存寄存器状态
+    mutex_lock(&bp_mutex);
+    save_thread_registers(current, regs, &entry->saved_regs);
+    entry->hit_regs_valid = true;
+    entry->hit_time = get_jiffies_64();
+    mutex_unlock(&bp_mutex);
+    
     // 检查是否已经暂停
     st = find_suspended_thread(entry->info.tid);
     if (st && st->stepping) {
@@ -463,10 +537,10 @@ static void hw_breakpoint_handler(struct perf_event *bp,
         st->stepping = false;
         printk(KERN_INFO "[HW_BP] Single step completed for thread %d\n", entry->info.tid);
     } else {
-        // 暂停线程
-        printk(KERN_INFO "[HW_BP] Suspending thread %d at breakpoint\n", entry->info.tid);
-        // 设置线程状态为TASK_STOPPED
-        __set_current_state(TASK_STOPPED);
+        // 发送SIGTRAP信号给线程，通知断点命中
+        // SIGTRAP是调试器常用的断点信号
+        printk(KERN_INFO "[HW_BP] Sending SIGTRAP to thread %d at breakpoint\n", entry->info.tid);
+        send_sig(SIGTRAP, current, 0);
     }
 }
 
@@ -514,6 +588,11 @@ static int set_hw_breakpoint(pid_t tid, uintptr_t addr, uint32_t type)
         ret = -ENOMEM;
         goto out_unlock;
     }
+    
+    // 初始化保存的寄存器信息
+    memset(&entry->saved_regs, 0, sizeof(ARM64_REGISTERS));
+    entry->hit_regs_valid = false;
+    entry->hit_time = 0;
     
     // 设置perf事件属性
     memset(&attr, 0, sizeof(struct perf_event_attr));
@@ -656,110 +735,6 @@ static void clear_all_breakpoints(void)
     mutex_unlock(&bp_mutex);
     
     printk(KERN_INFO "All hardware breakpoints cleared\n");
-}
-
-// 获取线程寄存器
-static int get_thread_registers(pid_t tid, ARM64_REGISTERS __user *regs)
-{
-    struct task_struct *task = NULL;
-    struct pt_regs *task_regs;
-    ARM64_REGISTERS kernel_regs;
-    int i, ret = 0;
-    
-    if (!regs)
-        return -EFAULT;
-    
-    // 获取线程
-    task = get_thread_by_tid(tid);
-    if (!task)
-        return -ESRCH;
-    
-    // 获取线程的寄存器
-    task_regs = task_pt_regs(task);
-    
-    if (!task_regs) {
-        ret = -EFAULT;
-        goto out;
-    }
-    
-    // 填充寄存器结构
-    memset(&kernel_regs, 0, sizeof(kernel_regs));
-    
-    // 复制通用寄存器 X0-X30
-    for (i = 0; i < 31; i++) {
-        kernel_regs.x[i] = task_regs->regs[i];
-    }
-    
-    // 复制特殊寄存器
-    kernel_regs.fp = task_regs->regs[29];     // X29作为帧指针
-    kernel_regs.lr = task_regs->regs[30];     // X30作为链接寄存器
-    kernel_regs.sp = task_regs->sp;
-    kernel_regs.pc = task_regs->pc;
-    kernel_regs.pstate = task_regs->pstate;
-    
-    // 复制到用户空间
-    if (copy_to_user(regs, &kernel_regs, sizeof(kernel_regs))) {
-        ret = -EFAULT;
-        goto out;
-    }
-    
-    printk(KERN_INFO "Registers read for thread %d, PC=0x%016lx\n", 
-           tid, (unsigned long)kernel_regs.pc);
-    
-out:
-    if (task)
-        put_task_struct(task);
-    return ret;
-}
-
-// 设置线程寄存器
-static int set_thread_registers(pid_t tid, ARM64_REGISTERS __user *regs)
-{
-    struct task_struct *task = NULL;
-    struct pt_regs *task_regs;
-    ARM64_REGISTERS kernel_regs;
-    int i, ret = 0;
-    
-    if (!regs)
-        return -EFAULT;
-    
-    // 从用户空间复制寄存器数据
-    if (copy_from_user(&kernel_regs, regs, sizeof(kernel_regs))) {
-        return -EFAULT;
-    }
-    
-    // 获取线程
-    task = get_thread_by_tid(tid);
-    if (!task)
-        return -ESRCH;
-    
-    // 获取线程的寄存器
-    task_regs = task_pt_regs(task);
-    
-    if (!task_regs) {
-        ret = -EFAULT;
-        goto out;
-    }
-    
-    // 设置通用寄存器 X0-X30
-    for (i = 0; i < 31; i++) {
-        task_regs->regs[i] = kernel_regs.x[i];
-    }
-    
-    // 设置特殊寄存器
-    task_regs->regs[29] = kernel_regs.fp;     // 帧指针
-    task_regs->regs[30] = kernel_regs.lr;     // 链接寄存器
-    task_regs->sp = kernel_regs.sp;
-    task_regs->pc = kernel_regs.pc;
-    task_regs->pstate = kernel_regs.pstate;
-    
-    printk(KERN_INFO "Registers set for thread %d, PC=0x%016lx\n", 
-           tid, (unsigned long)kernel_regs.pc);
-    
-out:
-    if (task)
-        put_task_struct(task);
-    return ret;
 }
 
 // 暂停线程
@@ -1015,38 +990,6 @@ static long dispatch_ioctl(struct file *file, unsigned int cmd, unsigned long ar
         clear_all_breakpoints();
         break;
 
-    case OP_GET_REGISTERS: {
-        REGISTER_OPERATION reg_op;
-        
-        if (copy_from_user(&reg_op, (void __user *)arg, sizeof(reg_op)))
-            return -EFAULT;
-        
-        if (!reg_op.regs)
-            return -EFAULT;
-        
-        ret = get_thread_registers(reg_op.tid, reg_op.regs);
-        if (ret < 0)
-            return ret;
-        
-        break;
-    }
-
-    case OP_SET_REGISTERS: {
-        REGISTER_OPERATION reg_op;
-        
-        if (copy_from_user(&reg_op, (void __user *)arg, sizeof(reg_op)))
-            return -EFAULT;
-        
-        if (!reg_op.regs)
-            return -EFAULT;
-        
-        ret = set_thread_registers(reg_op.tid, reg_op.regs);
-        if (ret < 0)
-            return ret;
-        
-        break;
-    }
-
     case OP_SUSPEND_THREAD: {
         PROCESS_CONTROL pc;
         
@@ -1080,6 +1023,22 @@ static long dispatch_ioctl(struct file *file, unsigned int cmd, unsigned long ar
             return -EFAULT;
         
         ret = single_step_thread(pc.tid);
+        if (ret < 0)
+            return ret;
+        
+        break;
+    }
+
+    case OP_GET_BREAKPOINT_HIT_REGISTERS: {
+        GET_BREAKPOINT_HIT_REGISTERS gbhr;
+        
+        if (copy_from_user(&gbhr, (void __user *)arg, sizeof(gbhr)))
+            return -EFAULT;
+        
+        if (!gbhr.regs)
+            return -EFAULT;
+        
+        ret = get_breakpoint_hit_registers(gbhr.tid, gbhr.addr, gbhr.regs);
         if (ret < 0)
             return ret;
         
@@ -1155,7 +1114,7 @@ static int __init driver_entry(void)
     printk(KERN_INFO "ARM64 Hardware Breakpoint Module loaded. Device: /dev/%s\n", DEVICE_NAME);
     printk(KERN_INFO "Maximum hardware breakpoints: %d\n", MAX_BREAKPOINTS);
     printk(KERN_INFO "NOTE: Hardware breakpoints operate on threads, not processes\n");
-    printk(KERN_INFO "      Use thread IDs (gettid()) instead of process IDs (getpid())\n");
+    printk(KERN_INFO "Use thread IDs (gettid()) instead of process IDs (getpid())\n");
     
     return 0;
 }
@@ -1187,4 +1146,4 @@ module_exit(driver_unload);
 MODULE_DESCRIPTION("ARM64 Hardware Breakpoint Kernel Module with Thread Control");
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("陈依涵");
-MODULE_VERSION("2.0");
+MODULE_VERSION("2.1"); 
