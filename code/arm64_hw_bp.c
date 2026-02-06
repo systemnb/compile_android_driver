@@ -1,8 +1,9 @@
 /*
- * ARM64硬件断点内核模块 - 修复版本
+ * ARM64硬件断点内核模块 - Hook PC版本
  * 硬件断点正确绑定到线程(task_struct)而非进程ID
  * 适配Linux 5.10+内核
- * 修改：增加全局寄存器存储，修改断点回调逻辑
+ * 修改：增加全局Hook PC，断点命中时修改PC寄存器
+ * 修改：增加全局变量记录命中断点的线程ID
  */
 
 #include "arm64_hw_bp.h"
@@ -47,24 +48,19 @@ typedef struct _ARM64_REGISTERS {
     uint64_t v[32];    // 向量寄存器 (可选)
 } ARM64_REGISTERS, *PARM64_REGISTERS;
 
-// 断点命中时存储的寄存器信息
-typedef struct _BREAKPOINT_HIT_INFO {
+typedef struct _HOOK_PC_OPERATION {
     pid_t tid;                    // 线程ID
-    uintptr_t addr;              // 断点地址
-    ARM64_REGISTERS regs;        // 命中断点时的寄存器值
-    uint64_t hit_time;           // 命中时间（jiffies）
-} BREAKPOINT_HIT_INFO, *PBREAKPOINT_HIT_INFO;
+    uintptr_t hook_pc;           // Hook目标地址
+} HOOK_PC_OPERATION, *PHOOK_PC_OPERATION;
 
-typedef struct _GET_BREAKPOINT_HIT_REGISTERS {
-    pid_t tid;                    // 线程ID
-    uintptr_t addr;              // 断点地址
-    ARM64_REGISTERS __user *regs; // 返回的寄存器数据
-} GET_BREAKPOINT_HIT_REGISTERS, *PGET_BREAKPOINT_HIT_REGISTERS;
-
-typedef struct _PROCESS_CONTROL {
-    pid_t tid;        // 线程ID
-    bool suspend;     // true: 暂停, false: 恢复
-} PROCESS_CONTROL, *PPROCESS_CONTROL;
+// 新增：最近命中断点的信息结构
+typedef struct _LAST_HIT_INFO {
+    pid_t tid;                    // 最近命中断点的线程ID
+    pid_t tgid;                   // 线程组ID
+    uintptr_t addr;               // 断点地址
+    uint64_t timestamp;           // 时间戳（纳秒）
+    uint32_t count;               // 命中次数
+} LAST_HIT_INFO, *PLAST_HIT_INFO;
 
 // IOCTL操作码
 enum HW_BREAKPOINT_OPERATIONS {
@@ -76,18 +72,10 @@ enum HW_BREAKPOINT_OPERATIONS {
     OP_CLEAR_BREAKPOINT = 0x805,
     OP_LIST_BREAKPOINTS = 0x806,
     OP_CLEAR_ALL_BREAKPOINTS = 0x807,
-    OP_SUSPEND_THREAD = 0x80A,
-    OP_RESUME_THREAD = 0x80B,
-    OP_SINGLE_STEP = 0x80C,
-    OP_GET_BREAKPOINT_HIT_REGISTERS = 0x80D, // 新增：获取断点命中的寄存器信息
-};
-
-// 暂停线程信息结构
-struct suspended_thread {
-    pid_t tid;
-    struct task_struct *task;
-    struct list_head list;
-    bool stepping;  // 单步执行模式
+    OP_SET_HOOK_PC = 0x808,       // 设置Hook PC地址
+    OP_GET_HOOK_PC = 0x809,       // 获取Hook PC地址
+    OP_GET_LAST_HIT_TID = 0x80A,  // 新增：获取最近命中的线程ID
+    OP_GET_LAST_HIT_INFO = 0x80B, // 新增：获取最近命中的详细信息
 };
 
 // 内部断点结构
@@ -95,16 +83,15 @@ struct hw_breakpoint_entry {
     HW_BREAKPOINT_INFO info;
     struct task_struct *task;    // 指向线程的task_struct
     struct list_head list;
-    ARM64_REGISTERS saved_regs;  // 保存的寄存器值
-    bool hit_regs_valid;         // 寄存器是否有效
-    uint64_t hit_time;           // 命中时间
+    uintptr_t hook_pc;           // 断点对应的Hook PC地址
 };
 
 // 全局变量
 static DEFINE_MUTEX(bp_mutex);
 static LIST_HEAD(bp_list);
-static LIST_HEAD(suspended_list);
 static int bp_count = 0;
+static uint64_t g_Hook_PC = 0;   // 全局Hook PC地址
+static LAST_HIT_INFO g_LastHitInfo = {0}; // 新增：最近命中的断点信息
 #define MAX_BREAKPOINTS 16
 
 // 函数声明
@@ -118,13 +105,8 @@ static void hw_breakpoint_handler(struct perf_event *bp, struct perf_sample_data
 static int set_hw_breakpoint(pid_t tid, uintptr_t addr, uint32_t type);
 static int clear_hw_breakpoint(pid_t tid, uintptr_t addr);
 static void clear_all_breakpoints(void);
-static int suspend_thread(pid_t tid);
-static int resume_thread(pid_t tid);
-static int single_step_thread(pid_t tid);
-static struct suspended_thread *find_suspended_thread(pid_t tid);
 static struct task_struct *get_thread_by_tid(pid_t tid);
-static int save_thread_registers(struct task_struct *task, struct pt_regs *regs, ARM64_REGISTERS *saved_regs);
-static int get_breakpoint_hit_registers(pid_t tid, uintptr_t addr, ARM64_REGISTERS __user *regs);
+static int set_hook_pc_for_breakpoint(pid_t tid, uintptr_t hook_pc);
 
 // 根据线程ID获取task_struct
 static struct task_struct *get_thread_by_tid(pid_t tid)
@@ -426,67 +408,23 @@ static uintptr_t get_module_base(pid_t pid, const char *name)
     return base_addr;
 }
 
-// 查找暂停线程
-static struct suspended_thread *find_suspended_thread(pid_t tid)
-{
-    struct suspended_thread *st;
-    
-    list_for_each_entry(st, &suspended_list, list) {
-        if (st->tid == tid) {
-            return st;
-        }
-    }
-    
-    return NULL;
-}
-
-// 保存线程寄存器到ARM64_REGISTERS结构
-static int save_thread_registers(struct task_struct *task, struct pt_regs *regs, ARM64_REGISTERS *saved_regs)
-{
-    int i;
-    
-    if (!task || !regs || !saved_regs)
-        return -EINVAL;
-    
-    // 填充寄存器结构
-    memset(saved_regs, 0, sizeof(ARM64_REGISTERS));
-    
-    // 复制通用寄存器 X0-X30
-    for (i = 0; i < 31; i++) {
-        saved_regs->x[i] = regs->regs[i];
-    }
-    
-    // 复制特殊寄存器
-    saved_regs->fp = regs->regs[29];     // X29作为帧指针
-    saved_regs->lr = regs->regs[30];     // X30作为链接寄存器
-    saved_regs->sp = regs->sp;
-    saved_regs->pc = regs->pc;
-    saved_regs->pstate = regs->pstate;
-    
-    return 0;
-}
-
-// 获取断点命中的寄存器信息
-static int get_breakpoint_hit_registers(pid_t tid, uintptr_t addr, ARM64_REGISTERS __user *regs)
+// 为断点设置Hook PC地址
+static int set_hook_pc_for_breakpoint(pid_t tid, uintptr_t hook_pc)
 {
     struct hw_breakpoint_entry *entry;
     int ret = -ENOENT;
     
-    if (!regs)
-        return -EFAULT;
-    
     mutex_lock(&bp_mutex);
     
     list_for_each_entry(entry, &bp_list, list) {
-        if (entry->info.tid == tid && entry->info.addr == addr && entry->hit_regs_valid) {
-            // 复制保存的寄存器数据到用户空间
-            if (copy_to_user(regs, &entry->saved_regs, sizeof(ARM64_REGISTERS))) {
-                ret = -EFAULT;
-            } else {
-                printk(KERN_INFO "Returned saved registers for thread %d at breakpoint 0x%016lx\n", 
-                       tid, (unsigned long)addr);
-                ret = 0;
-            }
+        if (entry->info.tid == tid) {
+            // 设置Hook PC地址
+            entry->hook_pc = hook_pc;
+            g_Hook_PC = hook_pc;  // 同时更新全局变量
+            
+            printk(KERN_INFO "Hook PC set to 0x%lx for thread %d\n", 
+                   (unsigned long)hook_pc, tid);
+            ret = 0;
             break;
         }
     }
@@ -496,13 +434,12 @@ static int get_breakpoint_hit_registers(pid_t tid, uintptr_t addr, ARM64_REGISTE
     return ret;
 }
 
-// 硬件断点处理函数 - 修改：发送信号而不是直接设置线程状态
+// 硬件断点处理函数 - 修改：记录命中的线程ID
 static void hw_breakpoint_handler(struct perf_event *bp,
                                  struct perf_sample_data *data,
                                  struct pt_regs *regs)
 {
     struct hw_breakpoint_entry *entry = bp->overflow_handler_context;
-    struct suspended_thread *st;
     
     if (!entry) {
         printk(KERN_ERR "No breakpoint context found\n");
@@ -516,32 +453,34 @@ static void hw_breakpoint_handler(struct perf_event *bp,
         return;
     }
     
+    // 更新最近命中的断点信息
+    mutex_lock(&bp_mutex);
+    g_LastHitInfo.tid = current->pid;
+    g_LastHitInfo.tgid = current->tgid;
+    g_LastHitInfo.addr = entry->info.addr;
+    g_LastHitInfo.timestamp = ktime_get_real_ns();
+    g_LastHitInfo.count++;
+    mutex_unlock(&bp_mutex);
+    
     printk(KERN_INFO "[HW_BP] Breakpoint hit!\n");
     printk(KERN_INFO "  Thread: %d (TGID: %d)\n", 
            entry->info.tid, entry->info.tgid);
     printk(KERN_INFO "  Address: 0x%016lx\n", (unsigned long)entry->info.addr);
     printk(KERN_INFO "  Type: %u\n", entry->info.type);
-    printk(KERN_INFO "  PC: 0x%016lx\n", (unsigned long)instruction_pointer(regs));
+    printk(KERN_INFO "  PC before: 0x%016lx\n", (unsigned long)instruction_pointer(regs));
     
-    // 保存寄存器状态
-    mutex_lock(&bp_mutex);
-    save_thread_registers(current, regs, &entry->saved_regs);
-    entry->hit_regs_valid = true;
-    entry->hit_time = get_jiffies_64();
-    mutex_unlock(&bp_mutex);
-    
-    // 检查是否已经暂停
-    st = find_suspended_thread(entry->info.tid);
-    if (st && st->stepping) {
-        // 单步执行模式，恢复执行
-        st->stepping = false;
-        printk(KERN_INFO "[HW_BP] Single step completed for thread %d\n", entry->info.tid);
+    // 如果设置了Hook PC，则修改PC寄存器
+    if (entry->hook_pc != 0) {
+        // 修改PC寄存器到Hook PC地址
+        regs->pc = entry->hook_pc;
+    } else if (g_Hook_PC != 0) {
+        // 如果断点没有单独设置Hook PC，使用全局Hook PC
+        regs->pc = g_Hook_PC;
     } else {
-        // 发送SIGTRAP信号给线程，通知断点命中
-        // SIGTRAP是调试器常用的断点信号
-        printk(KERN_INFO "[HW_BP] Sending SIGTRAP to thread %d at breakpoint\n", entry->info.tid);
-        send_sig(SIGSTOP, current, 1);
+        printk(KERN_INFO "  No hook PC set, continuing at original PC\n");
     }
+    
+    // 注意：我们不再发送任何信号，直接继续执行
 }
 
 // 设置硬件断点 - 修复版本：作用在线程上
@@ -589,10 +528,9 @@ static int set_hw_breakpoint(pid_t tid, uintptr_t addr, uint32_t type)
         goto out_unlock;
     }
     
-    // 初始化保存的寄存器信息
-    memset(&entry->saved_regs, 0, sizeof(ARM64_REGISTERS));
-    entry->hit_regs_valid = false;
-    entry->hit_time = 0;
+    // 初始化断点信息
+    memset(entry, 0, sizeof(struct hw_breakpoint_entry));
+    entry->hook_pc = 0;  // 默认没有Hook PC
     
     // 设置perf事件属性
     memset(&attr, 0, sizeof(struct perf_event_attr));
@@ -737,117 +675,6 @@ static void clear_all_breakpoints(void)
     printk(KERN_INFO "All hardware breakpoints cleared\n");
 }
 
-// 暂停线程
-static int suspend_thread(pid_t tid)
-{
-    struct task_struct *task = NULL;
-    struct suspended_thread *st;
-    int ret = 0;
-    
-    // 获取线程
-    task = get_thread_by_tid(tid);
-    if (!task)
-        return -ESRCH;
-    
-    // 检查是否已经暂停
-    st = find_suspended_thread(tid);
-    if (st) {
-        printk(KERN_INFO "Thread %d is already suspended\n", tid);
-        ret = -EALREADY;
-        goto out;
-    }
-    
-    // 分配暂停线程结构
-    st = kmalloc(sizeof(struct suspended_thread), GFP_KERNEL);
-    if (!st) {
-        ret = -ENOMEM;
-        goto out;
-    }
-    
-    // 初始化暂停线程信息
-    st->tid = tid;
-    st->task = get_task_struct(task);  // 增加引用计数
-    st->stepping = false;
-    INIT_LIST_HEAD(&st->list);
-    
-    // 添加到暂停列表
-    list_add_tail(&st->list, &suspended_list);
-    
-    // 发送SIGSTOP信号暂停线程
-    ret = send_sig(SIGSTOP, task, 1);
-    if (ret) {
-        list_del(&st->list);
-        put_task_struct(st->task);
-        kfree(st);
-        goto out;
-    }
-    
-    printk(KERN_INFO "Thread %d suspended\n", tid);
-    
-out:
-    if (task)
-        put_task_struct(task);
-    return ret;
-}
-
-// 恢复线程
-static int resume_thread(pid_t tid)
-{
-    struct task_struct *task = NULL;
-    struct suspended_thread *st;
-    int ret = 0;
-    
-    // 获取线程
-    task = get_thread_by_tid(tid);
-    if (!task)
-        return -ESRCH;
-    
-    // 查找暂停线程
-    st = find_suspended_thread(tid);
-    if (!st) {
-        printk(KERN_INFO "Thread %d is not suspended\n", tid);
-        ret = -ENOENT;
-        goto out;
-    }
-    
-    // 发送SIGCONT信号恢复线程
-    ret = send_sig(SIGCONT, task, 1);
-    if (ret == 0) {
-        // 从暂停列表中移除
-        list_del(&st->list);
-        put_task_struct(st->task);  // 释放之前获取的引用
-        kfree(st);
-        printk(KERN_INFO "Thread %d resumed\n", tid);
-    }
-    
-out:
-    if (task)
-        put_task_struct(task);
-    return ret;
-}
-
-// 单步执行
-static int single_step_thread(pid_t tid)
-{
-    struct suspended_thread *st;
-    
-    // 查找暂停线程
-    st = find_suspended_thread(tid);
-    if (!st) {
-        printk(KERN_INFO "Thread %d is not suspended\n", tid);
-        return -ENOENT;
-    }
-    
-    // 设置单步执行标志
-    st->stepping = true;
-    
-    // 恢复线程执行一条指令
-    // 注意：ARM64的单步执行通常通过设置调试寄存器实现
-    // 这里简化为恢复线程，依靠断点再次捕获
-    
-    return resume_thread(tid);
-}
-
 // IOCTL分发函数
 static int dispatch_open(struct inode *node, struct file *file)
 {
@@ -856,14 +683,6 @@ static int dispatch_open(struct inode *node, struct file *file)
 
 static int dispatch_close(struct inode *node, struct file *file)
 {
-    // 清理所有暂停线程
-    struct suspended_thread *st, *tmp;
-    
-    list_for_each_entry_safe(st, tmp, &suspended_list, list) {
-        // 恢复线程
-        resume_thread(st->tid);
-    }
-    
     return 0;
 }
 
@@ -990,57 +809,66 @@ static long dispatch_ioctl(struct file *file, unsigned int cmd, unsigned long ar
         clear_all_breakpoints();
         break;
 
-    case OP_SUSPEND_THREAD: {
-        PROCESS_CONTROL pc;
+    case OP_SET_HOOK_PC: {
+        HOOK_PC_OPERATION hpo;
         
-        if (copy_from_user(&pc, (void __user *)arg, sizeof(pc)))
+        if (copy_from_user(&hpo, (void __user *)arg, sizeof(hpo)))
             return -EFAULT;
         
-        ret = suspend_thread(pc.tid);
+        if (hpo.tid == 0) {
+            // 设置全局Hook PC
+            mutex_lock(&bp_mutex);
+            g_Hook_PC = hpo.hook_pc;
+            mutex_unlock(&bp_mutex);
+            printk(KERN_INFO "Global Hook PC set to 0x%lx\n", 
+                   (unsigned long)hpo.hook_pc);
+            ret = 0;
+        } else {
+            // 为特定线程的断点设置Hook PC
+            ret = set_hook_pc_for_breakpoint(hpo.tid, hpo.hook_pc);
+        }
+        
         if (ret < 0)
             return ret;
         
         break;
     }
 
-    case OP_RESUME_THREAD: {
-        PROCESS_CONTROL pc;
+    case OP_GET_HOOK_PC: {
+        uint64_t hook_pc;
         
-        if (copy_from_user(&pc, (void __user *)arg, sizeof(pc)))
+        mutex_lock(&bp_mutex);
+        hook_pc = g_Hook_PC;
+        mutex_unlock(&bp_mutex);
+        
+        if (copy_to_user((void __user *)arg, &hook_pc, sizeof(hook_pc)))
             return -EFAULT;
-        
-        ret = resume_thread(pc.tid);
-        if (ret < 0)
-            return ret;
         
         break;
     }
 
-    case OP_SINGLE_STEP: {
-        PROCESS_CONTROL pc;
+    case OP_GET_LAST_HIT_TID: {
+        pid_t last_hit_tid;
         
-        if (copy_from_user(&pc, (void __user *)arg, sizeof(pc)))
+        mutex_lock(&bp_mutex);
+        last_hit_tid = g_LastHitInfo.tid;
+        mutex_unlock(&bp_mutex);
+        
+        if (copy_to_user((void __user *)arg, &last_hit_tid, sizeof(last_hit_tid)))
             return -EFAULT;
-        
-        ret = single_step_thread(pc.tid);
-        if (ret < 0)
-            return ret;
         
         break;
     }
 
-    case OP_GET_BREAKPOINT_HIT_REGISTERS: {
-        GET_BREAKPOINT_HIT_REGISTERS gbhr;
+    case OP_GET_LAST_HIT_INFO: {
+        LAST_HIT_INFO last_hit_info;
         
-        if (copy_from_user(&gbhr, (void __user *)arg, sizeof(gbhr)))
+        mutex_lock(&bp_mutex);
+        last_hit_info = g_LastHitInfo;
+        mutex_unlock(&bp_mutex);
+        
+        if (copy_to_user((void __user *)arg, &last_hit_info, sizeof(last_hit_info)))
             return -EFAULT;
-        
-        if (!gbhr.regs)
-            return -EFAULT;
-        
-        ret = get_breakpoint_hit_registers(gbhr.tid, gbhr.addr, gbhr.regs);
-        if (ret < 0)
-            return ret;
         
         break;
     }
@@ -1075,7 +903,7 @@ static int __init driver_entry(void)
     int ret;
     int breakpoint_slots = 0;
     
-    printk(KERN_INFO "ARM64 Hardware Breakpoint Module loading...\n");
+    printk(KERN_INFO "ARM64 Hardware Breakpoint Module (Hook PC Version) loading...\n");
     
 #ifndef CONFIG_ARM64
     printk(KERN_ERR "This module is for ARM64 architecture only!\n");
@@ -1101,9 +929,12 @@ static int __init driver_entry(void)
     return -ENODEV;
 #endif
     
-    // 初始化列表
+    // 初始化列表和全局变量
     INIT_LIST_HEAD(&bp_list);
-    INIT_LIST_HEAD(&suspended_list);
+    g_Hook_PC = 0;  // 初始化全局Hook PC
+    
+    // 初始化最近命中信息
+    memset(&g_LastHitInfo, 0, sizeof(g_LastHitInfo));
     
     ret = misc_register(&misc_dev);
     if (ret) {
@@ -1113,6 +944,8 @@ static int __init driver_entry(void)
     
     printk(KERN_INFO "ARM64 Hardware Breakpoint Module loaded. Device: /dev/%s\n", DEVICE_NAME);
     printk(KERN_INFO "Maximum hardware breakpoints: %d\n", MAX_BREAKPOINTS);
+    printk(KERN_INFO "Hook PC feature: Modify PC register to jump to hook address on breakpoint hit\n");
+    printk(KERN_INFO "Last hit tracking: Record TID of last breakpoint hit (IOCTL 0x%x)\n", OP_GET_LAST_HIT_TID);
     printk(KERN_INFO "NOTE: Hardware breakpoints operate on threads, not processes\n");
     printk(KERN_INFO "Use thread IDs (gettid()) instead of process IDs (getpid())\n");
     
@@ -1122,14 +955,7 @@ static int __init driver_entry(void)
 // 模块卸载
 static void __exit driver_unload(void)
 {
-    struct suspended_thread *st, *tmp;
-    
     printk(KERN_INFO "ARM64 Hardware Breakpoint Module unloading...\n");
-    
-    // 恢复所有暂停线程
-    list_for_each_entry_safe(st, tmp, &suspended_list, list) {
-        resume_thread(st->tid);
-    }
     
     // 清除所有断点
     clear_all_breakpoints();
@@ -1143,7 +969,7 @@ static void __exit driver_unload(void)
 module_init(driver_entry);
 module_exit(driver_unload);
 
-MODULE_DESCRIPTION("ARM64 Hardware Breakpoint Kernel Module with Thread Control");
+MODULE_DESCRIPTION("ARM64 Hardware Breakpoint Kernel Module with Hook PC Feature");
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("陈依涵");
-MODULE_VERSION("2.1"); 
+MODULE_VERSION("2.2");
