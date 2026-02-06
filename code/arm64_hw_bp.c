@@ -540,7 +540,7 @@ static void hw_breakpoint_handler(struct perf_event *bp,
         // 发送SIGTRAP信号给线程，通知断点命中
         // SIGTRAP是调试器常用的断点信号
         printk(KERN_INFO "[HW_BP] Sending SIGTRAP to thread %d at breakpoint\n", entry->info.tid);
-        send_sig(SIGTRAP, current, 0);
+        send_sig(SIGSTOP, current, 1);
     }
 }
 
