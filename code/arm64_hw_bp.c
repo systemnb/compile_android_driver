@@ -1,9 +1,8 @@
 /*
- * ARM64硬件断点内核模块 - Hook PC版本
+ * ARM64硬件断点内核模块 - 基础版本
  * 硬件断点正确绑定到线程(task_struct)而非进程ID
  * 适配Linux 5.10+内核
- * 修改：增加全局Hook PC，断点命中时修改PC寄存器
- * 修改：增加全局变量记录命中断点的线程ID
+ * 功能：断点设置/清除、内存读写、命中信息获取
  */
 
 #include "arm64_hw_bp.h"
@@ -37,22 +36,6 @@ typedef struct _MODULE_BASE {
     uintptr_t base;
 } MODULE_BASE, *PMODULE_BASE;
 
-// ARM64寄存器结构
-typedef struct _ARM64_REGISTERS {
-    uint64_t x[31];    // 通用寄存器 X0-X30
-    uint64_t fp;       // 帧指针
-    uint64_t lr;       // 链接寄存器
-    uint64_t sp;       // 栈指针
-    uint64_t pc;       // 程序计数器
-    uint64_t pstate;   // 处理器状态
-    uint64_t v[32];    // 向量寄存器 (可选)
-} ARM64_REGISTERS, *PARM64_REGISTERS;
-
-typedef struct _HOOK_PC_OPERATION {
-    pid_t tid;                    // 线程ID
-    uintptr_t hook_pc;           // Hook目标地址
-} HOOK_PC_OPERATION, *PHOOK_PC_OPERATION;
-
 // 新增：最近命中断点的信息结构
 typedef struct _LAST_HIT_INFO {
     pid_t tid;                    // 最近命中断点的线程ID
@@ -62,20 +45,18 @@ typedef struct _LAST_HIT_INFO {
     uint32_t count;               // 命中次数
 } LAST_HIT_INFO, *PLAST_HIT_INFO;
 
-// IOCTL操作码
+// IOCTL操作码 - 从600开始
 enum HW_BREAKPOINT_OPERATIONS {
-    OP_INIT_KEY = 0x800,
-    OP_READ_MEM = 0x801,
-    OP_WRITE_MEM = 0x802,
-    OP_MODULE_BASE = 0x803,
-    OP_SET_BREAKPOINT = 0x804,
-    OP_CLEAR_BREAKPOINT = 0x805,
-    OP_LIST_BREAKPOINTS = 0x806,
-    OP_CLEAR_ALL_BREAKPOINTS = 0x807,
-    OP_SET_HOOK_PC = 0x808,       // 设置Hook PC地址
-    OP_GET_HOOK_PC = 0x809,       // 获取Hook PC地址
-    OP_GET_LAST_HIT_TID = 0x80A,  // 新增：获取最近命中的线程ID
-    OP_GET_LAST_HIT_INFO = 0x80B, // 新增：获取最近命中的详细信息
+    OP_INIT_KEY = 0x600,
+    OP_READ_MEM = 0x601,
+    OP_WRITE_MEM = 0x602,
+    OP_MODULE_BASE = 0x603,
+    OP_SET_BREAKPOINT = 0x604,
+    OP_CLEAR_BREAKPOINT = 0x605,
+    OP_LIST_BREAKPOINTS = 0x606,
+    OP_CLEAR_ALL_BREAKPOINTS = 0x607,
+    OP_GET_LAST_HIT_TID = 0x608,  // 获取最近命中的线程ID
+    OP_GET_LAST_HIT_INFO = 0x609, // 获取最近命中的详细信息
 };
 
 // 内部断点结构
@@ -83,16 +64,14 @@ struct hw_breakpoint_entry {
     HW_BREAKPOINT_INFO info;
     struct task_struct *task;    // 指向线程的task_struct
     struct list_head list;
-    uintptr_t hook_pc;           // 断点对应的Hook PC地址
 };
 
 // 全局变量
 static DEFINE_MUTEX(bp_mutex);
 static LIST_HEAD(bp_list);
 static int bp_count = 0;
-static uint64_t g_Hook_PC = 0;   // 全局Hook PC地址
-static LAST_HIT_INFO g_LastHitInfo = {0}; // 新增：最近命中的断点信息
-#define MAX_BREAKPOINTS 16
+static LAST_HIT_INFO g_LastHitInfo = {0}; // 最近命中的断点信息
+#define MAX_BREAKPOINTS 4
 
 // 函数声明
 static phys_addr_t translate_linear_address(struct mm_struct *mm, uintptr_t va);
@@ -106,7 +85,6 @@ static int set_hw_breakpoint(pid_t tid, uintptr_t addr, uint32_t type);
 static int clear_hw_breakpoint(pid_t tid, uintptr_t addr);
 static void clear_all_breakpoints(void);
 static struct task_struct *get_thread_by_tid(pid_t tid);
-static int set_hook_pc_for_breakpoint(pid_t tid, uintptr_t hook_pc);
 
 // 根据线程ID获取task_struct
 static struct task_struct *get_thread_by_tid(pid_t tid)
@@ -408,32 +386,6 @@ static uintptr_t get_module_base(pid_t pid, const char *name)
     return base_addr;
 }
 
-// 为断点设置Hook PC地址
-static int set_hook_pc_for_breakpoint(pid_t tid, uintptr_t hook_pc)
-{
-    struct hw_breakpoint_entry *entry;
-    int ret = -ENOENT;
-    
-    mutex_lock(&bp_mutex);
-    
-    list_for_each_entry(entry, &bp_list, list) {
-        if (entry->info.tid == tid) {
-            // 设置Hook PC地址
-            entry->hook_pc = hook_pc;
-            g_Hook_PC = hook_pc;  // 同时更新全局变量
-            
-            printk(KERN_INFO "Hook PC set to 0x%lx for thread %d\n", 
-                   (unsigned long)hook_pc, tid);
-            ret = 0;
-            break;
-        }
-    }
-    
-    mutex_unlock(&bp_mutex);
-    
-    return ret;
-}
-
 // 硬件断点处理函数 - 修改：记录命中的线程ID
 static void hw_breakpoint_handler(struct perf_event *bp,
                                  struct perf_sample_data *data,
@@ -467,20 +419,9 @@ static void hw_breakpoint_handler(struct perf_event *bp,
            entry->info.tid, entry->info.tgid);
     printk(KERN_INFO "  Address: 0x%016lx\n", (unsigned long)entry->info.addr);
     printk(KERN_INFO "  Type: %u\n", entry->info.type);
-    printk(KERN_INFO "  PC before: 0x%016lx\n", (unsigned long)instruction_pointer(regs));
+    printk(KERN_INFO "  PC: 0x%016lx\n", (unsigned long)instruction_pointer(regs));
     
-    // 如果设置了Hook PC，则修改PC寄存器
-    if (entry->hook_pc != 0) {
-        // 修改PC寄存器到Hook PC地址
-        regs->pc = entry->hook_pc;
-    } else if (g_Hook_PC != 0) {
-        // 如果断点没有单独设置Hook PC，使用全局Hook PC
-        regs->pc = g_Hook_PC;
-    } else {
-        printk(KERN_INFO "  No hook PC set, continuing at original PC\n");
-    }
-    
-    // 注意：我们不再发送任何信号，直接继续执行
+    // 断点命中后，继续执行（不修改PC）
 }
 
 // 设置硬件断点 - 修复版本：作用在线程上
@@ -530,7 +471,6 @@ static int set_hw_breakpoint(pid_t tid, uintptr_t addr, uint32_t type)
     
     // 初始化断点信息
     memset(entry, 0, sizeof(struct hw_breakpoint_entry));
-    entry->hook_pc = 0;  // 默认没有Hook PC
     
     // 设置perf事件属性
     memset(&attr, 0, sizeof(struct perf_event_attr));
@@ -809,44 +749,6 @@ static long dispatch_ioctl(struct file *file, unsigned int cmd, unsigned long ar
         clear_all_breakpoints();
         break;
 
-    case OP_SET_HOOK_PC: {
-        HOOK_PC_OPERATION hpo;
-        
-        if (copy_from_user(&hpo, (void __user *)arg, sizeof(hpo)))
-            return -EFAULT;
-        
-        if (hpo.tid == 0) {
-            // 设置全局Hook PC
-            mutex_lock(&bp_mutex);
-            g_Hook_PC = hpo.hook_pc;
-            mutex_unlock(&bp_mutex);
-            printk(KERN_INFO "Global Hook PC set to 0x%lx\n", 
-                   (unsigned long)hpo.hook_pc);
-            ret = 0;
-        } else {
-            // 为特定线程的断点设置Hook PC
-            ret = set_hook_pc_for_breakpoint(hpo.tid, hpo.hook_pc);
-        }
-        
-        if (ret < 0)
-            return ret;
-        
-        break;
-    }
-
-    case OP_GET_HOOK_PC: {
-        uint64_t hook_pc;
-        
-        mutex_lock(&bp_mutex);
-        hook_pc = g_Hook_PC;
-        mutex_unlock(&bp_mutex);
-        
-        if (copy_to_user((void __user *)arg, &hook_pc, sizeof(hook_pc)))
-            return -EFAULT;
-        
-        break;
-    }
-
     case OP_GET_LAST_HIT_TID: {
         pid_t last_hit_tid;
         
@@ -903,7 +805,7 @@ static int __init driver_entry(void)
     int ret;
     int breakpoint_slots = 0;
     
-    printk(KERN_INFO "ARM64 Hardware Breakpoint Module (Hook PC Version) loading...\n");
+    printk(KERN_INFO "ARM64 Hardware Breakpoint Module loading...\n");
     
 #ifndef CONFIG_ARM64
     printk(KERN_ERR "This module is for ARM64 architecture only!\n");
@@ -931,7 +833,6 @@ static int __init driver_entry(void)
     
     // 初始化列表和全局变量
     INIT_LIST_HEAD(&bp_list);
-    g_Hook_PC = 0;  // 初始化全局Hook PC
     
     // 初始化最近命中信息
     memset(&g_LastHitInfo, 0, sizeof(g_LastHitInfo));
@@ -944,7 +845,6 @@ static int __init driver_entry(void)
     
     printk(KERN_INFO "ARM64 Hardware Breakpoint Module loaded. Device: /dev/%s\n", DEVICE_NAME);
     printk(KERN_INFO "Maximum hardware breakpoints: %d\n", MAX_BREAKPOINTS);
-    printk(KERN_INFO "Hook PC feature: Modify PC register to jump to hook address on breakpoint hit\n");
     printk(KERN_INFO "Last hit tracking: Record TID of last breakpoint hit (IOCTL 0x%x)\n", OP_GET_LAST_HIT_TID);
     printk(KERN_INFO "NOTE: Hardware breakpoints operate on threads, not processes\n");
     printk(KERN_INFO "Use thread IDs (gettid()) instead of process IDs (getpid())\n");
@@ -969,7 +869,7 @@ static void __exit driver_unload(void)
 module_init(driver_entry);
 module_exit(driver_unload);
 
-MODULE_DESCRIPTION("ARM64 Hardware Breakpoint Kernel Module with Hook PC Feature");
+MODULE_DESCRIPTION("ARM64 Hardware Breakpoint Kernel Module");
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("陈依涵");
-MODULE_VERSION("2.2");
+MODULE_VERSION("4.0");
