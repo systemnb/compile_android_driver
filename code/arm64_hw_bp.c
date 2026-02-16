@@ -1,9 +1,6 @@
 /*
- * ARM64硬件断点内核模块 - Hook PC版本
  * 硬件断点正确绑定到线程(task_struct)而非进程ID
  * 适配Linux 5.10+内核
- * 修改：增加全局Hook PC，断点命中时修改PC寄存器
- * 修改：增加全局变量记录命中断点的线程ID
  */
 
 #include "arm64_hw_bp.h"
@@ -37,17 +34,6 @@ typedef struct _MODULE_BASE {
     uintptr_t base;
 } MODULE_BASE, *PMODULE_BASE;
 
-// ARM64寄存器结构
-typedef struct _ARM64_REGISTERS {
-    uint64_t x[31];    // 通用寄存器 X0-X30
-    uint64_t fp;       // 帧指针
-    uint64_t lr;       // 链接寄存器
-    uint64_t sp;       // 栈指针
-    uint64_t pc;       // 程序计数器
-    uint64_t pstate;   // 处理器状态
-    uint64_t v[32];    // 向量寄存器 (可选)
-} ARM64_REGISTERS, *PARM64_REGISTERS;
-
 // 新增：最近命中断点的信息结构
 typedef struct _LAST_HIT_INFO {
     pid_t tid;                    // 最近命中断点的线程ID
@@ -55,6 +41,7 @@ typedef struct _LAST_HIT_INFO {
     uintptr_t addr;               // 断点地址
     uint64_t timestamp;           // 时间戳（纳秒）
     uint32_t count;               // 命中次数
+    struct pt_regs regs;
 } LAST_HIT_INFO, *PLAST_HIT_INFO;
 
 // IOCTL操作码
@@ -424,6 +411,7 @@ static void hw_breakpoint_handler(struct perf_event *bp,
     g_LastHitInfo.addr = entry->info.addr;
     g_LastHitInfo.timestamp = ktime_get_real_ns();
     g_LastHitInfo.count++;
+    memcpy(&g_LastHitInfo.regs, (void*)regs, sizeof(struct pt_regs));
     mutex_unlock(&bp_mutex);
     
     printk(KERN_INFO "[HW_BP] Breakpoint hit!\n");
@@ -431,9 +419,6 @@ static void hw_breakpoint_handler(struct perf_event *bp,
            entry->info.tid, entry->info.tgid);
     printk(KERN_INFO "  Address: 0x%016lx\n", (unsigned long)entry->info.addr);
     printk(KERN_INFO "  Type: %u\n", entry->info.type);
-    printk(KERN_INFO "  PC before: 0x%016lx\n", (unsigned long)instruction_pointer(regs));
-    
-    // 注意：我们不再发送任何信号，直接继续执行
 }
 
 // 设置硬件断点 - 修复版本：作用在线程上
