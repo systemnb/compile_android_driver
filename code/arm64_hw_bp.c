@@ -41,7 +41,7 @@ typedef struct _LAST_HIT_INFO {
     uintptr_t addr;               // 断点地址
     uint64_t timestamp;           // 时间戳（纳秒）
     uint32_t count;               // 命中次数
-    struct pt_regs regs;
+    struct user_pt_regs regs;
 } LAST_HIT_INFO, *PLAST_HIT_INFO;
 
 // IOCTL操作码
@@ -411,7 +411,16 @@ static void hw_breakpoint_handler(struct perf_event *bp,
     g_LastHitInfo.addr = entry->info.addr;
     g_LastHitInfo.timestamp = ktime_get_real_ns();
     g_LastHitInfo.count++;
-    memcpy(&g_LastHitInfo.regs, (void*)regs, sizeof(struct pt_regs));
+    
+    //获取寄存器
+    for (int i = 0; i < 31; i++) {
+        g_LastHitInfo.regs.regs[i] = regs->regs[i];
+    }
+    
+    g_LastHitInfo.regs.sp = regs->sp;
+    g_LastHitInfo.regs.pc = regs->pc;
+    g_LastHitInfo.regs.pstate = regs->pstate;
+    
     mutex_unlock(&bp_mutex);
     
     printk(KERN_INFO "[HW_BP] Breakpoint hit!\n");
