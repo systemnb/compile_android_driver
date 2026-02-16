@@ -413,7 +413,8 @@ static void hw_breakpoint_handler(struct perf_event *bp,
     g_LastHitInfo.count++;
     
     //获取寄存器
-    for (int i = 0; i < 31; i++) {
+    int i = 0;
+    for (i = 0; i < 31; i++) {
         g_LastHitInfo.regs.regs[i] = regs->regs[i];
     }
     
