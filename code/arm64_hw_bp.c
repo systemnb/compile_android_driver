@@ -1,8 +1,9 @@
 /*
- * ARM64硬件断点内核模块 - 基础版本
+ * ARM64硬件断点内核模块 - Hook PC版本
  * 硬件断点正确绑定到线程(task_struct)而非进程ID
  * 适配Linux 5.10+内核
- * 功能：断点设置/清除、内存读写、命中信息获取
+ * 修改：增加全局Hook PC，断点命中时修改PC寄存器
+ * 修改：增加全局变量记录命中断点的线程ID
  */
 
 #include "arm64_hw_bp.h"
@@ -36,6 +37,17 @@ typedef struct _MODULE_BASE {
     uintptr_t base;
 } MODULE_BASE, *PMODULE_BASE;
 
+// ARM64寄存器结构
+typedef struct _ARM64_REGISTERS {
+    uint64_t x[31];    // 通用寄存器 X0-X30
+    uint64_t fp;       // 帧指针
+    uint64_t lr;       // 链接寄存器
+    uint64_t sp;       // 栈指针
+    uint64_t pc;       // 程序计数器
+    uint64_t pstate;   // 处理器状态
+    uint64_t v[32];    // 向量寄存器 (可选)
+} ARM64_REGISTERS, *PARM64_REGISTERS;
+
 // 新增：最近命中断点的信息结构
 typedef struct _LAST_HIT_INFO {
     pid_t tid;                    // 最近命中断点的线程ID
@@ -45,7 +57,7 @@ typedef struct _LAST_HIT_INFO {
     uint32_t count;               // 命中次数
 } LAST_HIT_INFO, *PLAST_HIT_INFO;
 
-// IOCTL操作码 - 从600开始
+// IOCTL操作码
 enum HW_BREAKPOINT_OPERATIONS {
     OP_INIT_KEY = 0x600,
     OP_READ_MEM = 0x601,
@@ -55,8 +67,8 @@ enum HW_BREAKPOINT_OPERATIONS {
     OP_CLEAR_BREAKPOINT = 0x605,
     OP_LIST_BREAKPOINTS = 0x606,
     OP_CLEAR_ALL_BREAKPOINTS = 0x607,
-    OP_GET_LAST_HIT_TID = 0x608,  // 获取最近命中的线程ID
-    OP_GET_LAST_HIT_INFO = 0x609, // 获取最近命中的详细信息
+    OP_GET_LAST_HIT_TID = 0x608,  // 新增：获取最近命中的线程ID
+    OP_GET_LAST_HIT_INFO = 0x609, // 新增：获取最近命中的详细信息
 };
 
 // 内部断点结构
@@ -70,8 +82,8 @@ struct hw_breakpoint_entry {
 static DEFINE_MUTEX(bp_mutex);
 static LIST_HEAD(bp_list);
 static int bp_count = 0;
-static LAST_HIT_INFO g_LastHitInfo = {0}; // 最近命中的断点信息
-#define MAX_BREAKPOINTS 4
+static LAST_HIT_INFO g_LastHitInfo = {0}; // 新增：最近命中的断点信息
+#define MAX_BREAKPOINTS 16
 
 // 函数声明
 static phys_addr_t translate_linear_address(struct mm_struct *mm, uintptr_t va);
@@ -419,9 +431,9 @@ static void hw_breakpoint_handler(struct perf_event *bp,
            entry->info.tid, entry->info.tgid);
     printk(KERN_INFO "  Address: 0x%016lx\n", (unsigned long)entry->info.addr);
     printk(KERN_INFO "  Type: %u\n", entry->info.type);
-    printk(KERN_INFO "  PC: 0x%016lx\n", (unsigned long)instruction_pointer(regs));
+    printk(KERN_INFO "  PC before: 0x%016lx\n", (unsigned long)instruction_pointer(regs));
     
-    // 断点命中后，继续执行（不修改PC）
+    // 注意：我们不再发送任何信号，直接继续执行
 }
 
 // 设置硬件断点 - 修复版本：作用在线程上
@@ -745,10 +757,11 @@ static long dispatch_ioctl(struct file *file, unsigned int cmd, unsigned long ar
         break;
     }
 
-    case OP_CLEAR_ALL_BREAKPOINTS:
+    case OP_CLEAR_ALL_BREAKPOINTS: {
         clear_all_breakpoints();
         break;
-
+    }
+    
     case OP_GET_LAST_HIT_TID: {
         pid_t last_hit_tid;
         
@@ -805,7 +818,7 @@ static int __init driver_entry(void)
     int ret;
     int breakpoint_slots = 0;
     
-    printk(KERN_INFO "ARM64 Hardware Breakpoint Module loading...\n");
+    printk(KERN_INFO "ARM64 Hardware Breakpoint Module (Hook PC Version) loading...\n");
     
 #ifndef CONFIG_ARM64
     printk(KERN_ERR "This module is for ARM64 architecture only!\n");
@@ -845,6 +858,7 @@ static int __init driver_entry(void)
     
     printk(KERN_INFO "ARM64 Hardware Breakpoint Module loaded. Device: /dev/%s\n", DEVICE_NAME);
     printk(KERN_INFO "Maximum hardware breakpoints: %d\n", MAX_BREAKPOINTS);
+    printk(KERN_INFO "Hook PC feature: Modify PC register to jump to hook address on breakpoint hit\n");
     printk(KERN_INFO "Last hit tracking: Record TID of last breakpoint hit (IOCTL 0x%x)\n", OP_GET_LAST_HIT_TID);
     printk(KERN_INFO "NOTE: Hardware breakpoints operate on threads, not processes\n");
     printk(KERN_INFO "Use thread IDs (gettid()) instead of process IDs (getpid())\n");
@@ -869,7 +883,7 @@ static void __exit driver_unload(void)
 module_init(driver_entry);
 module_exit(driver_unload);
 
-MODULE_DESCRIPTION("ARM64 Hardware Breakpoint Kernel Module");
+MODULE_DESCRIPTION("ARM64 Hardware Breakpoint Kernel Module with Hook PC Feature");
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("陈依涵");
-MODULE_VERSION("4.0");
+MODULE_VERSION("2.2");
