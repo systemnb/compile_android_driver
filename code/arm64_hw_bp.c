@@ -56,6 +56,7 @@ enum HW_BREAKPOINT_OPERATIONS {
     OP_CLEAR_ALL_BREAKPOINTS = 0x607,
     OP_GET_LAST_HIT_TID = 0x608,  // 新增：获取最近命中的线程ID
     OP_GET_LAST_HIT_INFO = 0x609, // 新增：获取最近命中的详细信息
+    OP_RESUME_THREAD = 0x60A,   // 恢复被暂停的线程
 };
 
 // 内部断点结构
@@ -84,6 +85,7 @@ static int set_hw_breakpoint(pid_t tid, uintptr_t addr, uint32_t type);
 static int clear_hw_breakpoint(pid_t tid, uintptr_t addr);
 static void clear_all_breakpoints(void);
 static struct task_struct *get_thread_by_tid(pid_t tid);
+static int resume_thread(pid_t tid);
 
 // 根据线程ID获取task_struct
 static struct task_struct *get_thread_by_tid(pid_t tid)
@@ -385,47 +387,38 @@ static uintptr_t get_module_base(pid_t pid, const char *name)
     return base_addr;
 }
 
-// 硬件断点处理函数 - 修改：记录命中的线程ID
+//断点回调
 static void hw_breakpoint_handler(struct perf_event *bp,
                                  struct perf_sample_data *data,
                                  struct pt_regs *regs)
 {
     struct hw_breakpoint_entry *entry = bp->overflow_handler_context;
-    
+    struct task_struct *task = current;
+
     if (!entry) {
         printk(KERN_ERR "No breakpoint context found\n");
         return;
     }
-    
-    // 检查是否是期望的线程触发了断点
-    if (current->pid != entry->info.tid) {
-        printk(KERN_WARNING "[HW_BP] Breakpoint triggered by unexpected thread: %d (expected: %d)\n",
-               current->pid, entry->info.tid);
+
+    if (task->pid != entry->info.tid) {
+        printk(KERN_WARNING "[HW_BP] Breakpoint triggered by unexpected thread: %d\n", task->pid);
         return;
     }
-    
-    // 更新最近命中的断点信息
+
+    // 更新最近命中信息
     mutex_lock(&bp_mutex);
-    g_LastHitInfo.tid = current->pid;
-    g_LastHitInfo.tgid = current->tgid;
+    g_LastHitInfo.tid = task->pid;
+    g_LastHitInfo.tgid = task->tgid;
     g_LastHitInfo.addr = entry->info.addr;
     g_LastHitInfo.timestamp = ktime_get_real_ns();
     g_LastHitInfo.count++;
-    
-    //获取寄存器
-    memcpy(g_LastHitInfo.regs.regs, regs->regs, sizeof(g_LastHitInfo.regs.regs));
-    
-    g_LastHitInfo.regs.sp = regs->sp;
-    g_LastHitInfo.regs.pc = regs->pc;
-    g_LastHitInfo.regs.pstate = regs->pstate;
-    
+    memcpy(&g_LastHitInfo.regs, regs, sizeof(g_LastHitInfo.regs));
     mutex_unlock(&bp_mutex);
-    
-    printk(KERN_INFO "[HW_BP] Breakpoint hit!\n");
-    printk(KERN_INFO "  Thread: %d (TGID: %d)\n", 
-           entry->info.tid, entry->info.tgid);
-    printk(KERN_INFO "  Address: 0x%016lx\n", (unsigned long)entry->info.addr);
-    printk(KERN_INFO "  Type: %u\n", entry->info.type);
+
+    printk(KERN_INFO "[HW_BP] Breakpoint hit by thread %d, sending SIGSTOP...\n", task->pid);
+
+    // 暂停当前线程
+    send_sig_info(SIGSTOP, SEND_SIG_PRIV, task);
 }
 
 // 设置硬件断点 - 修复版本：作用在线程上
@@ -619,6 +612,24 @@ static void clear_all_breakpoints(void)
     printk(KERN_INFO "All hardware breakpoints cleared\n");
 }
 
+static int resume_thread(pid_t tid)
+{
+    struct task_struct *task;
+    int ret = 0;
+
+    task = get_thread_by_tid(tid);
+    if (!task) {
+        printk(KERN_ERR "Thread %d not found\n", tid);
+        return -ESRCH;
+    }
+
+    printk(KERN_INFO "Resuming thread %d\n", tid);
+    send_sig_info(SIGCONT, SEND_SIG_PRIV, task);
+
+    put_task_struct(task);
+    return ret;
+}
+
 // IOCTL分发函数
 static int dispatch_open(struct inode *node, struct file *file)
 {
@@ -779,7 +790,20 @@ static long dispatch_ioctl(struct file *file, unsigned int cmd, unsigned long ar
         
         break;
     }
+    
+    case OP_RESUME_THREAD: {
+        pid_t tid;
 
+        if (copy_from_user(&tid, (void __user *)arg, sizeof(tid)))
+            return -EFAULT;
+
+        ret = resume_thread(tid);
+        if (ret < 0)
+            return ret;
+
+        break;
+    }
+    
     default:
         return -ENOTTY;
     }
