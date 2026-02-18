@@ -54,6 +54,26 @@ def find_plugin_dir(plugin_name: str) -> Path:
 
     raise RuntimeError(f"Cannot locate plugin directory for '{plugin_name}'")
 
+def expand_env_in_obj(obj):
+    """
+    Recursively expand environment variables in strings like:
+      ${GITHUB_WORKSPACE}, $GITHUB_WORKSPACE
+    """
+    import os
+
+    if isinstance(obj, dict):
+        return {k: expand_env_in_obj(v) for k, v in obj.items()}
+
+    if isinstance(obj, list):
+        return [expand_env_in_obj(x) for x in obj]
+
+    if isinstance(obj, str):
+        # Expand ${VAR} / $VAR and ~
+        return os.path.expandvars(os.path.expanduser(obj))
+
+    return obj
+
+
 def write_plugin_config(plugin_dir: Path, overrides: dict):
     # Plugin reads ./config.yaml in its own dir
     cfg_path = plugin_dir / "config.yaml"
@@ -91,6 +111,7 @@ def main():
 
     # Apply config overrides into plugin config.yaml
     overrides = flow.get("kade", {}).get("config_overrides", {}) or {}
+    overrides = expand_env_in_obj(overrides)
     if overrides:
         write_plugin_config(plugin_dir, overrides)
 

@@ -25,6 +25,19 @@ kade:
         bazel:
           args: ["--config=fast"]
 
+    non_gki:
+      source:
+        type: "zip"                # repo | local | zip
+        zip_path: "${GITHUB_WORKSPACE}/kernel.zip"
+        zip_strip_root: true
+
+      build:
+        mode: "script"
+        script: "build.sh"
+        args: []
+        artifacts_dir: "out"
+
+
 # ABI control (optional but supported)
 abi:
   upstream_patch: true             # always recommended for CI
