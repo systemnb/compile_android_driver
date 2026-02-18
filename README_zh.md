@@ -1,7 +1,9 @@
 # kade —— 基于 lyenv 的 Android 内核驱动自动化构建
+
 **其他语言版本: [English](README.md), [中文](README_zh.md).**
-kade 是一个构建在 **lyenv** 之上的 **Android 内核驱动自动化构建框架**，
-用于统一、可复现地完成 GKI / non-GKI 驱动的编译、ABI 处理和产物导出。
+
+kade 是一个构建在 **lyenv** 之上的 Android 内核驱动自动化框架，
+用于统一、可复现地完成 **GKI / non-GKI** 内核的构建、ABI 处理和产物导出。
 
 该仓库通常配合以下项目使用：
 
@@ -10,15 +12,15 @@ kade 是一个构建在 **lyenv** 之上的 **Android 内核驱动自动化构�
 
 ---
 
-## 核心特性
+## 特性
 
 - ✅ 支持 GKI / non-GKI 内核
-- ✅ 单一配置文件驱动（YAML）
+- ✅ 单一配置文件（kadeflow.yaml）
 - ✅ 原生支持 GitHub Actions
 - ✅ 支持外置驱动 / in-tree 驱动
 - ✅ 自动处理 ABI 上游与 ABI 列表
 - ✅ 自动导出构建产物
-- ✅ 支持构建后扩展命令（如导出 compile_commands、解包镜像）
+- ✅ 支持构建后扩展命令
 
 ---
 
@@ -36,21 +38,26 @@ kade 是一个构建在 **lyenv** 之上的 **Android 内核驱动自动化构�
 │
 ├── .github/
 │   └── workflows/
-│       └── kade.yml          # GitHub Actions
+│       └── kade.yml
 │
 ├── README.md
 └── README_zh.md
 ```
 
-驱动源码目录说明
-在 kade 体系中：
+---
 
-仓库中的某一个目录会被视为“驱动源码目录”
+## 驱动源码目录说明
 
-推荐约定
-`code/`
+当使用 **外置驱动** 时，kade 会将仓库中的某一个目录
+视为驱动源码目录。
 
-在 `kadeflow.yaml` 中指定：
+### 推荐约定
+
+```
+code/
+```
+
+配置方式：
 
 ```yaml
 gki:
@@ -59,19 +66,25 @@ gki:
     external_src_dir: "${GITHUB_WORKSPACE}/code"
 ```
 
-kade 只会将该目录复制进内核源码树，其它文件不会参与构建。
+kade 只会复制该目录，其它文件不会进入内核源码树。
 
-目录名并非固定，只要路径配置正确即可。
+---
 
-ABI 符号如何提供（强烈推荐）
-ABI 是接口契约，应当作为仓库的一部分进行管理。
-推荐方式：仓库文件
+## ABI 符号的提供方式（强烈推荐）
+
+ABI 是接口契约，应该作为仓库内容进行管理。
+
+### 推荐方式：仓库文件
+
 创建文件：
-`abi.symbols`
+
+```text
+abi.symbols
+```
 
 示例内容：
-```
-# Driver ABI symbols
+
+```text
 register_kprobe
 unregister_kprobe
 kallsyms_lookup_name
@@ -85,25 +98,24 @@ abi:
   symbols_file: "${GITHUB_WORKSPACE}/abi.symbols"
 ```
 
-CI 中将自动执行：
-```
+构建前将自动执行：
+
+```bash
 kade abi_upstream
 kade abi --file abi.symbols
 ```
 
-✅ 可审查
-✅ 可复现
-✅ 适合长期维护
+---
 
-kadeflow.yaml（核心配置文件）
-`kadeflow.yaml` 是整个自动化流程的唯一配置入口。
-最小 GKI 示例
+## kadeflow.yaml（核心配置）
+
+`kadeflow.yaml` 是 CI 与本地构建的唯一配置入口。
+
+---
+
+## GKI 配置示例
 
 ```yaml
-project:
-  name: "ci-kade"
-  plugin: "kade"
-
 kade:
   config_overrides:
     kernel:
@@ -119,77 +131,125 @@ kade:
         in_tree: false
         external_src_dir: "${GITHUB_WORKSPACE}/code"
         module_name: "mydriver.ko"
-
-abi:
-  upstream_patch: true
-  symbols_file: "${GITHUB_WORKSPACE}/abi.symbols"
-
-flow:
-  steps:
-    - "kade prepare"
-    - "kade deps"
-    - "kade sync"
-    - "kade build"
-    - "kade export"
 ```
 
-默认 CI 行为说明
-GitHub Actions 默认会执行以下流程：
+---
 
-- 安装 lyenv
-- 创建并激活 lyenv 项目
-- 安装 kade 插件
-- 应用 `kadeflow.yaml` 中的配置
-- 自动执行：
-  - `kade prepare`
-  - `kade deps`
-  - `kade sync`
-  - `kade abi_upstream`
-  - `kade abi`（若提供 symbols）
-  - `kade build`
-  - `kade export`
-- 将构建产物上传为 CI artifacts
+## non-GKI 配置说明
 
-执行：
-```
-eval "$(lyenv activate)"
-```
-后，kade 等插件命令在任意目录均可直接使用。
-
-扩展构建流程
-用户可在配置中追加命令，例如：
+启用 non-GKI：
 
 ```yaml
-flow:
-  post_commands:
-    - "kade compile_commands"
-    - "kade img unpack boot.img --out ${GITHUB_WORKSPACE}/img_out"
+kernel:
+  flavor: "non_gki"
 ```
 
-无需修改 workflow。
+### 源码来源（non_gki.source）
 
-构建产物
-CI 会自动导出并上传：
+```yaml
+non_gki:
+  source:
+    type: "repo"     # repo | local | zip
+```
 
-- 内核模块（`.ko`）
-- 内核镜像与 DTB
-- `compile_commands.json`
-- 镜像解包结果（如有）
+ZIP 示例：
 
-为什么使用 kade？
+```yaml
+non_gki:
+  source:
+    type: "zip"
+    zip_path: "${GITHUB_WORKSPACE}/kernel.zip"
+    zip_strip_root: true
+```
 
-| 传统 CI | kade |
-| --- | --- |
-| 脆弱的 shell 脚本 | 结构化配置 |
-| ABI 手工维护 | ABI 自动管理 |
-| 难以复现 | 本地 / CI 一致 |
-| 改动成本高 | 易扩展 |
+---
+
+### 构建方式（non_gki.build）
+
+#### script 模式（推荐）
+
+```yaml
+non_gki:
+  build:
+    mode: "script"
+    script: "build.sh"
+    artifacts_dir: "out"
+```
+
+#### make 模式（可选）
+
+```yaml
+non_gki:
+  build:
+    mode: "make"
+    make:
+      defconfig: "vendor_defconfig"
+      kernel_series: "4.9_plus"
+      toolchain_path_prefix: "/root/toolchain/clang/bin:/root/toolchain/gcc32/bin:/root/toolchain/gcc64/bin"
+```
+
+---
+
+## non-GKI compile_commands
+
+non-GKI 不使用 Bazel。
+
+kade 执行：
+
+```bash
+python3 gen_compile_commands.py -d <out_dir>
+```
+
+可通过配置指定目录：
+
+```yaml
+compile_commands:
+  non_gki_out_dir: "out/android13-5.15/common"
+```
+
+---
+
+## 默认 CI 行为
+
+GitHub Actions 默认执行：
+
+   - `kade prepare`
+   - `kade deps`
+   - `kade sync`
+   - `kade abi_upstream`
+   - `kade abi` （若提供 symbols）
+   - `kade build`
+   - `kade export`
+   - `上传构建产物`
+
+执行：
+
+```bash
+eval "$(lyenv activate)"
+```
+
+后，可在任意目录直接使用 `kade`。
+
+---
+
+## 环境变量说明
+
+`kadeflow.yaml` 中的路径支持：
+
+- `${GITHUB_WORKSPACE}`
+- `${LYENV_HOME}`
+
+在 CI 中会自动展开。
+
+---
 
 [License](LICENSE)
-License 由仓库维护者自行定义。
 
-相关项目
+由仓库维护者自行定义。
+
+---
+
+## 相关项目
 
 - lyenv：https://github.com/systemnb/lyenv
-- lyenv-plugin-center：https://github.com/systemnb/lyenv-plugin-center
-```
+- lyenv-plugin-center: https://github.com/systemnb/lyenv-plugin-center
