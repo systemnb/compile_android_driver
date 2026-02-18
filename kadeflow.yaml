@@ -1,0 +1,57 @@
+project:
+  name: "ci-kade"                  # lyenv project name
+  plugin: "kade"                   # plugin name
+
+# kade base config (overrides merged into kade plugin config.yaml)
+kade:
+  config_overrides:
+    kernel:
+      flavor: "gki"                # gki | non_gki
+
+    gki:
+      android_version: 14
+      kernel_version: "6.1"
+      target_arch: "aarch64"
+
+      driver:
+        project_name: "rwProcMem_module"
+        in_tree: false
+        external_src_dir: "${GITHUB_WORKSPACE}/code"
+        module_name: "rwProcMem_module.ko"
+        overwrite: true
+
+      # optional: Bazel args for >13
+      build:
+        bazel:
+          args: ["--config=fast"]
+
+# ABI control (optional but supported)
+abi:
+  upstream_patch: true             # always recommended for CI
+  # one of the following (optional):
+  symbols_file: "${GITHUB_WORKSPACE}/symbols.txt"
+  # or inline list:
+  # symbols:
+  #   - register_kprobe
+  #   - unregister_kprobe
+  sort: false
+  replace: false
+
+# Default CI flow: build + export (minimal, as you requested)
+flow:
+  steps:
+    - "kade prepare"
+    - "kade deps"
+    - "kade sync"
+    - "kade abi_upstream"
+    # abi step is injected automatically by runner if abi.symbols_file or abi.symbols provided
+    - "kade build"
+    - "kade export"
+  post_commands: []                # users can add extra commands here, e.g. compile_commands/img unpack
+
+artifacts:
+  name: "kade-artifacts"
+  paths:
+    - "${LYENV_HOME}/workspace/exports/**"
+    - "${LYENV_HOME}/workspace/**/compile_commands.json"
+    - "${GITHUB_WORKSPACE}/img_out/**"     # if user adds img unpack to post_commands

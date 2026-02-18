@@ -1,0 +1,82 @@
+name: kade build (lyenv + kade)
+
+on:
+  workflow_dispatch:
+    inputs:
+      flow_config:
+        description: "Path to kadeflow.yaml"
+        required: true
+        default: "kadeflow.yaml"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    env:
+      LYENV_HOME: ${{ github.workspace }}/.lyenv_home
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install minimal bootstrap deps
+        run: |
+          set -eux
+          sudo apt-get update
+          sudo apt-get install -y make git curl python3 python3-pip
+
+      - name: Cache (LYENV_HOME caches)
+        uses: actions/cache@v4
+        with:
+          path: |
+            ${{ env.LYENV_HOME }}/cache
+            ${{ env.LYENV_HOME }}/ccache
+            ${{ env.LYENV_HOME }}/bazel-cache
+          key: kade-cache-${{ runner.os }}-${{ hashFiles('kadeflow.yaml', 'config.yaml') }}
+          restore-keys: |
+            kade-cache-${{ runner.os }}-
+
+      - name: Install lyenv
+        run: |
+          set -eux
+          mkdir -p "${LYENV_HOME}"
+          git clone https://github.com/systemnb/lyenv "${GITHUB_WORKSPACE}/_lyenv"
+          cd "${GITHUB_WORKSPACE}/_lyenv"
+          make install
+
+      - name: Create & activate project
+        run: |
+          set -eux
+          # Default project name; runner will read actual from kadeflow.yaml if needed
+          PROJECT="ci-kade"
+          lyenv create "${PROJECT}"
+          cd "${PROJECT}"
+          lyenv init .
+          eval "$(lyenv activate)"
+          echo "LYENV_HOME=${LYENV_HOME}"
+          which lyenv
+          # After activate, plugin commands can be executed from anywhere
+
+      - name: Run kade flow
+        run: |
+          set -eux
+          python3 -m pip install --user pyyaml
+          PROJECT="ci-kade"
+          cd "${GITHUB_WORKSPACE}/${PROJECT}"
+          eval "$(lyenv activate)"
+          python3 "${GITHUB_WORKSPACE}/.github/scripts/run_kadeflow.py" \
+            --config "${GITHUB_WORKSPACE}/${{ github.event.inputs.flow_config }}"
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: kade-artifacts
+          path: |
+            ${{ env.LYENV_HOME }}/workspace/exports/**
+            ${{ env.LYENV_HOME }}/workspace/**/compile_commands.json
+            ${{ github.workspace }}/img_out/**
+          if-no-files-found: warn
