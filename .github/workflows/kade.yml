@@ -69,7 +69,7 @@ jobs:
           cd "${GITHUB_WORKSPACE}/${PROJECT}"
           eval "$(lyenv activate)"
           python3 "${GITHUB_WORKSPACE}/.github/scripts/run_kadeflow.py" \
-            --config "${GITHUB_WORKSPACE}/${{ github.event.inputs.flow_config }} \"
+            --config "${GITHUB_WORKSPACE}/${{ github.event.inputs.flow_config }}" \
             --debug \
             --log-file "${GITHUB_WORKSPACE}/kadeflow.log"
 
