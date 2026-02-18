@@ -14,10 +14,10 @@ kade:
       target_arch: "aarch64"
 
       driver:
-        project_name: "rwProcMem_module"
+        project_name: "ly"
         in_tree: false
         external_src_dir: "${GITHUB_WORKSPACE}/code"
-        module_name: "rwProcMem_module.ko"
+        module_name: "ly.ko"
         overwrite: true
 
       # optional: Bazel args for >13
