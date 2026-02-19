@@ -243,9 +243,10 @@ eval "$(lyenv activate)"
 
 ---
 
-[License](LICENSE)
+## 许可证
 
-由仓库维护者自行定义。
+- 目录 `code` 下所有文件为 [GPL-2.0-only](https://www.gnu.org/licenses/old-licenses/gpl-2.0.en.html)。
+- 除 `code` 目录的其他部分均为 [Apache License 2.0](LICENSE)。
 
 ---
 

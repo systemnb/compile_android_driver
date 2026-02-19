@@ -271,7 +271,10 @@ They are expanded automatically before kade runs.
 
 ---
 
-[License](LICENSE)
+#License
+
+- Files under the `code` directory are [GPL-2.0-only](https://www.gnu.org/licenses/old-licenses/gpl-2.0.en.html).
+- All other parts except the `code` directory are [Apache License 2.0](LICENSE).
 
 Defined by the repository owner.
 
