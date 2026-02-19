@@ -42,7 +42,7 @@ kade:
 abi:
   upstream_patch: true             # always recommended for CI
   # one of the following (optional):
-  symbols_file: "${GITHUB_WORKSPACE}/symbols.txt"
+  symbols_file: "${GITHUB_WORKSPACE}/abi.symbols"
   # or inline list:
   # symbols:
   #   - register_kprobe
