@@ -1,0 +1,11 @@
+This project includes or uses the following open source software:
+
+- lyenv
+  https://github.com/systemnb/lyenv
+  Licensed under the Apache License, Version 2.0
+
+- lyenv-plugin-center
+  https://github.com/systemnb/lyenv-plugin-center
+  Licensed under the Apache License, Version 2.0
+
+Copyright © systemnb and contributors.
