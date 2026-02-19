@@ -74,11 +74,24 @@ jobs:
             --log-file "${GITHUB_WORKSPACE}/kadeflow.log"
 
       - name: Upload artifacts
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: kade-artifacts
           path: |
+            # Project-local workspace
+            ${{ github.workspace }}/ci-kade/workspace/exports/**
+            ${{ github.workspace }}/ci-kade/workspace/**/compile_commands.json
+            ${{ github.workspace }}/ci-kade/workspace/img_out/**
+            ${{ github.workspace }}/ci-kade/workspace/android-kernel/out/**
+
+            # LYENV_HOME workspace (fallback layout)
             ${{ env.LYENV_HOME }}/workspace/exports/**
             ${{ env.LYENV_HOME }}/workspace/**/compile_commands.json
+            ${{ env.LYENV_HOME }}/workspace/img_out/**
+            ${{ env.LYENV_HOME }}/workspace/android-kernel/out/**
+
+            # Caller directory outputs (if you used --out relative to repo)
             ${{ github.workspace }}/img_out/**
           if-no-files-found: warn
+
