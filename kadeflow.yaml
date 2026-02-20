@@ -14,10 +14,10 @@ kade:
       target_arch: "aarch64"
 
       driver:
-        project_name: "ly"
+        project_name: "file_copy"
         in_tree: false
         external_src_dir: "${GITHUB_WORKSPACE}/code"
-        module_name: "ly.ko"
+        module_name: "file_copy.ko"
         overwrite: true
 
       # optional: Bazel args for >13
